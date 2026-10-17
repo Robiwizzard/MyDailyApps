@@ -7,7 +7,7 @@ import { ProfilePanel } from "./components/ProfilePanel";
 
 type Dialog =
   | { kind: "confirm"; app: AppView; info: ConfirmInfo }
-  | { kind: "token"; app: AppView; message: string }
+  | { kind: "token"; app: AppView; message: string; action: "install" | "update" }
   | { kind: "error"; title: string; message: string; log?: string[] }
   | { kind: "logs"; app: AppView; lines: string[] };
 
@@ -123,9 +123,29 @@ export function App() {
     } catch (e) {
       const err = e as ApiError;
       if (err.confirm) setDialog({ kind: "confirm", app, info: err.confirm });
-      else if (err.needsToken) setDialog({ kind: "token", app, message: err.message });
+      else if (err.needsToken) setDialog({ kind: "token", app, message: err.message, action: "install" });
       else if (err.log && err.log.length)
         setDialog({ kind: "error", title: `Could not install ${app.name}`, message: err.message, log: err.log });
+      else setAppError(app.id, err.message);
+    } finally {
+      setAppBusy(app.id, undefined);
+      refreshApps().catch(() => {});
+    }
+  };
+
+  // ----- update -----
+  const update = async (app: AppView, confirm: boolean, token?: string) => {
+    setAppError(app.id);
+    if (confirm) setAppBusy(app.id, "updating");
+    try {
+      const r = await api.update(app.id, confirm, token);
+      replaceApp(r.app);
+    } catch (e) {
+      const err = e as ApiError;
+      if (err.confirm) setDialog({ kind: "confirm", app, info: err.confirm });
+      else if (err.needsToken) setDialog({ kind: "token", app, message: err.message, action: "update" });
+      else if (err.log && err.log.length)
+        setDialog({ kind: "error", title: `Could not update ${app.name}`, message: err.message, log: err.log });
       else setAppError(app.id, err.message);
     } finally {
       setAppBusy(app.id, undefined);
@@ -303,6 +323,7 @@ export function App() {
                 onForceStop={() => stop(a, true)}
                 onLogs={() => showLogs(a)}
                 onSync={() => syncNow(a)}
+                onUpdate={() => update(a, false)}
               />
             ))}
           </div>
@@ -316,6 +337,7 @@ export function App() {
           onClose={() => setProfileOpen(false)}
           onShutdown={shutdown}
           onLibraryChanged={() => refreshApps().catch(() => {})}
+          checkingUpdates={status.checkingUpdates}
           libraryNote={status.library}
         />
       )}
@@ -329,6 +351,7 @@ export function App() {
             const d = dialog;
             setDialog(null);
             if (d.info.kind === "install") install(d.app, true);
+            else if (d.info.kind === "update") update(d.app, true);
             else start(d.app, true);
           }}
         />
@@ -341,7 +364,8 @@ export function App() {
           onSubmit={(t) => {
             const d = dialog;
             setDialog(null);
-            install(d.app, true, t);
+            if (d.action === "update") update(d.app, true, t);
+            else install(d.app, true, t);
           }}
         />
       )}
@@ -375,17 +399,19 @@ export function App() {
 
 function ConfirmDialog({ info, app, onCancel, onConfirm }: { info: ConfirmInfo; app: AppView; onCancel: () => void; onConfirm: () => void }) {
   const isInstall = info.kind === "install";
+  const isUpdate = info.kind === "update";
+  const title = isInstall ? `Install ${app.name}?` : isUpdate ? `Update ${app.name}?` : `Run ${app.name} for the first time?`;
   return (
-    <Modal title={isInstall ? `Install ${app.name}?` : `Run ${app.name} for the first time?`} onClose={onCancel} wide>
+    <Modal title={title} onClose={onCancel} wide>
       <p>
         Apps run code on this computer. Check these commands before continuing{app.repo ? <> (from <code>{app.repo}</code>)</> : null}.
       </p>
       <p className="muted small">
         Folder: <code>{info.folder}</code>
       </p>
-      {isInstall && (
+      {(isInstall || isUpdate) && (
         <>
-          <h3 className="small-h">Install steps</h3>
+          <h3 className="small-h">{isUpdate ? "Update steps" : "Install steps"}</h3>
           <pre className="log">{info.commands.join("\n")}</pre>
         </>
       )}
@@ -402,7 +428,7 @@ function ConfirmDialog({ info, app, onCancel, onConfirm }: { info: ConfirmInfo; 
           Cancel
         </button>
         <button type="button" className="btn btn-primary" onClick={onConfirm}>
-          {isInstall ? "Install" : "Run"}
+          {isInstall ? "Install" : isUpdate ? "Update" : "Run"}
         </button>
       </div>
     </Modal>

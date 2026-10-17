@@ -9,6 +9,7 @@ interface Props {
   onShutdown: () => void;
   onLibraryChanged: () => void;
   libraryNote: string;
+  checkingUpdates: boolean;
 }
 
 /** Resize a picked image to a small square data URL (keeps the stored picture tiny). */
@@ -33,7 +34,7 @@ async function toAvatar(file: File): Promise<string> {
   }
 }
 
-export function ProfilePanel({ settings, onSettings, onClose, onShutdown, onLibraryChanged, libraryNote }: Props) {
+export function ProfilePanel({ settings, onSettings, onClose, onShutdown, onLibraryChanged, libraryNote, checkingUpdates }: Props) {
   const panelRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const libRef = useRef<HTMLInputElement>(null);
@@ -173,6 +174,21 @@ export function ProfilePanel({ settings, onSettings, onClose, onShutdown, onLibr
             </a>
             <button type="button" className="btn btn-quiet" onClick={() => run(async () => { await api.rescan(); onLibraryChanged(); setInfo("Apps folder scanned."); })}>
               Rescan folder
+            </button>
+            <button
+              type="button"
+              className="btn btn-quiet"
+              disabled={checkingUpdates}
+              onClick={() =>
+                run(async () => {
+                  const r = await api.checkUpdates();
+                  onLibraryChanged();
+                  const n = r.apps.filter((a) => a.update).length;
+                  setInfo(n === 0 ? "All installed apps are up to date." : `${n} app${n === 1 ? " has" : "s have"} an update.`);
+                })
+              }
+            >
+              {checkingUpdates ? "Checking…" : "Check for updates"}
             </button>
             {settings?.drive.connected && (
               <button type="button" className="btn btn-quiet" onClick={() => run(async () => { await api.driveSync(); onLibraryChanged(); setInfo("Library reloaded from Drive."); })}>

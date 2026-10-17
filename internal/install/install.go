@@ -29,6 +29,8 @@ type Marker struct {
 	Type        string    `json:"type"`
 	Launch      string    `json:"launch"`
 	InstalledAt time.Time `json:"installedAt"`
+	ReleaseTag  string    `json:"releaseTag,omitempty"` // release installs: the installed version
+	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
 }
 
 // ErrNeedsToken means the repo or release looks private: ask for a token.
@@ -217,7 +219,11 @@ func Run(ctx context.Context, app library.App, p *Plan, opt Options, log func(st
 			return fmt.Errorf("setup command failed: %w", err)
 		}
 	}
-	if err := writeMarker(p.Folder, Marker{Option: p.Option, Type: o.Type, Launch: o.Launch, InstalledAt: time.Now()}); err != nil {
+	m := Marker{Option: p.Option, Type: o.Type, Launch: o.Launch, InstalledAt: time.Now()}
+	if p.release != nil {
+		m.ReleaseTag = p.release.Tag
+	}
+	if err := writeMarker(p.Folder, m); err != nil {
 		return err
 	}
 	ok = true
@@ -227,24 +233,34 @@ func Run(ctx context.Context, app library.App, p *Plan, opt Options, log func(st
 func gitClone(ctx context.Context, repo, dir, token string, log func(string)) error {
 	log(fmt.Sprintf("$ git clone %s %s", repo, dir))
 	c := exec.CommandContext(ctx, "git", "clone", repo, dir)
-	c.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if token != "" {
-		// Passed through the environment, not the command line or git config.
-		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
-		c.Env = append(c.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: Basic "+auth)
-	}
+	c.Env = gitEnv(token)
 	var buf bytes.Buffer
 	err := runLogged(c, func(s string) { buf.WriteString(s + "\n"); log(s) })
 	if err != nil {
-		out := strings.ToLower(buf.String())
-		if strings.Contains(out, "could not read username") || strings.Contains(out, "authentication failed") ||
-			strings.Contains(out, "repository not found") || strings.Contains(out, "terminal prompts disabled") {
+		if needsAuth(buf.String()) {
 			return ErrNeedsToken
 		}
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 	return nil
+}
+
+// gitEnv never lets git prompt, and passes a token through the environment
+// (not the command line or git config) when one is given.
+func gitEnv(token string) []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if token != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
+			"GIT_CONFIG_VALUE_0=Authorization: Basic "+auth)
+	}
+	return env
+}
+
+func needsAuth(out string) bool {
+	out = strings.ToLower(out)
+	return strings.Contains(out, "could not read username") || strings.Contains(out, "authentication failed") ||
+		strings.Contains(out, "repository not found") || strings.Contains(out, "terminal prompts disabled")
 }
 
 func runLogged(c *exec.Cmd, log func(string)) error {

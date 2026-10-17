@@ -25,6 +25,7 @@ type releaseAsset struct {
 	URL    string // browser download URL (public)
 	APIURL string // API URL (works with a token for private repos)
 	Size   int64
+	Tag    string // the release's tag, e.g. v1.2.0
 }
 
 var httpClient = &http.Client{Timeout: 10 * time.Minute}
@@ -79,7 +80,8 @@ func findRelease(ctx context.Context, repo string, o library.InstallOption, toke
 		return nil, fmt.Errorf("GitHub answered %s", resp.Status)
 	}
 	var rel struct {
-		Assets []struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
 			Name               string `json:"name"`
 			URL                string `json:"url"`
 			BrowserDownloadURL string `json:"browser_download_url"`
@@ -93,7 +95,7 @@ func findRelease(ctx context.Context, repo string, o library.InstallOption, toke
 	for _, a := range rel.Assets {
 		names = append(names, a.Name)
 		if matchesPlatform(a.Name, o.Asset, runtime.GOOS, runtime.GOARCH) {
-			return &releaseAsset{Name: a.Name, URL: a.BrowserDownloadURL, APIURL: a.URL, Size: a.Size}, nil
+			return &releaseAsset{Name: a.Name, URL: a.BrowserDownloadURL, APIURL: a.URL, Size: a.Size, Tag: rel.TagName}, nil
 		}
 	}
 	return nil, fmt.Errorf("no package for %s/%s in the release (has: %s)", runtime.GOOS, runtime.GOARCH, strings.Join(names, ", "))

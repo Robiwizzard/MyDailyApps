@@ -17,6 +17,8 @@ export interface AppView {
   cloud: boolean;
   syncing?: boolean;
   syncNote?: string;
+  update?: string; // set when a newer version is available, e.g. "3 new commits"
+  updating?: boolean;
 }
 
 export interface AppsResponse {
@@ -40,6 +42,7 @@ export interface Status {
   mode: "guest" | "persistent";
   version: number;
   library: string;
+  checkingUpdates: boolean;
 }
 
 export interface Settings {
@@ -52,7 +55,7 @@ export interface Settings {
 }
 
 export interface ConfirmInfo {
-  kind: "install" | "launch";
+  kind: "install" | "launch" | "update";
   folder: string;
   commands: string[];
   launch: string;
@@ -106,6 +109,9 @@ export const api = {
     request<{ url: string }>("POST", `/api/apps/${enc(id)}/launch`, { confirm }),
   stop: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/stop`),
   forceStop: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/force-stop`),
+  update: (id: string, confirm: boolean, token?: string) =>
+    request<{ app: AppView; log: string[] }>("POST", `/api/apps/${enc(id)}/update`, { confirm, token }),
+  checkUpdates: () => request<AppsResponse>("POST", "/api/updates/check"),
   sync: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/sync`),
   logs: (id: string) => request<{ lines: string[] }>("GET", `/api/apps/${enc(id)}/logs`),
   settings: () => request<Settings>("GET", "/api/settings"),

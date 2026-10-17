@@ -44,21 +44,24 @@ type Host struct {
 	Procs *procs.Manager
 	Sync  *cloudsync.Syncer
 
-	mu         sync.Mutex
-	resolved   map[string]library.App // library entry merged with the app's manifest
-	scan       map[string]install.ScanResult
-	syncLocks  map[string]*sync.Mutex
-	syncing    map[string]bool
-	syncNote   map[string]string
-	syncWG     sync.WaitGroup
-	installing map[string]bool
-	installErr map[string]string
-	steps      []Step
-	ready      bool
-	notices    []string
-	libNote    string
-	tokens     map[string]string // session-only GitHub tokens by repo owner
-	version    int64             // bumps on any change, lets the UI poll cheaply
+	mu              sync.Mutex
+	resolved        map[string]library.App // library entry merged with the app's manifest
+	scan            map[string]install.ScanResult
+	syncLocks       map[string]*sync.Mutex
+	syncing         map[string]bool
+	syncNote        map[string]string
+	syncWG          sync.WaitGroup
+	updates         map[string]install.UpdateStatus
+	updating        map[string]bool
+	checkingUpdates bool
+	installing      map[string]bool
+	installErr      map[string]string
+	steps           []Step
+	ready           bool
+	notices         []string
+	libNote         string
+	tokens          map[string]string // session-only GitHub tokens by repo owner
+	version         int64             // bumps on any change, lets the UI poll cheaply
 
 	shutdownOnce sync.Once
 	ShutdownCh   chan struct{}
@@ -69,6 +72,7 @@ func New(cfg *config.Config, store *state.Store, sf *procs.StateFile) (*Host, er
 	h := &Host{
 		Cfg: cfg, Store: store, Lib: library.NewCache(cfg.DataDir),
 		resolved: map[string]library.App{}, syncLocks: map[string]*sync.Mutex{}, syncing: map[string]bool{}, syncNote: map[string]string{},
+		updates: map[string]install.UpdateStatus{}, updating: map[string]bool{},
 		scan: map[string]install.ScanResult{}, installing: map[string]bool{}, installErr: map[string]string{},
 		tokens: map[string]string{}, ShutdownCh: make(chan struct{}),
 		steps: []Step{
@@ -116,12 +120,13 @@ func (h *Host) setStep(id, st, detail string) {
 
 // Status is the GET /api/status payload.
 type Status struct {
-	Ready   bool     `json:"ready"`
-	Steps   []Step   `json:"steps"`
-	Notices []string `json:"notices"`
-	Mode    string   `json:"mode"`
-	Version int64    `json:"version"`
-	Library string   `json:"library"` // where the library came from
+	Ready           bool     `json:"ready"`
+	CheckingUpdates bool     `json:"checkingUpdates"`
+	Steps           []Step   `json:"steps"`
+	Notices         []string `json:"notices"`
+	Mode            string   `json:"mode"`
+	Version         int64    `json:"version"`
+	Library         string   `json:"library"` // where the library came from
 }
 
 func (h *Host) Status() Status {
@@ -131,7 +136,7 @@ func (h *Host) Status() Status {
 	if h.libNote != "" {
 		src += " (" + h.libNote + ")"
 	}
-	return Status{Ready: h.ready, Steps: append([]Step(nil), h.steps...), Notices: append([]string{}, h.notices...),
+	return Status{Ready: h.ready, CheckingUpdates: h.checkingUpdates, Steps: append([]Step(nil), h.steps...), Notices: append([]string{}, h.notices...),
 		Mode: string(h.Cfg.Mode), Version: h.version, Library: src}
 }
 
@@ -182,6 +187,9 @@ func (h *Host) Startup(ctx context.Context) {
 	h.ready = true
 	h.mu.Unlock()
 	h.bump()
+
+	// Look for app updates in the background; the library is usable meanwhile.
+	go h.CheckUpdates(ctx)
 }
 
 func (h *Host) libraryDetail() string {
@@ -280,6 +288,8 @@ type AppView struct {
 	Cloud        bool   `json:"cloud"`              // the app syncs data to Drive
 	Syncing      bool   `json:"syncing,omitempty"`  // a sync is running now
 	SyncNote     string `json:"syncNote,omitempty"` // result or problem of the last sync
+	Update       string `json:"update,omitempty"`   // set when a newer version exists, e.g. "3 new commits"
+	Updating     bool   `json:"updating,omitempty"`
 }
 
 // Apps merges the library with the scan and running state. Never installs.
@@ -293,6 +303,11 @@ func (h *Host) Apps() []AppView {
 	resolved := h.resolved
 	syncing := copyBools(h.syncing)
 	notes := copyStrings(h.syncNote)
+	updates := make(map[string]install.UpdateStatus, len(h.updates))
+	for k, v := range h.updates {
+		updates[k] = v
+	}
+	updating := copyBools(h.updating)
 	h.mu.Unlock()
 	out := make([]AppView, 0, len(l.Apps))
 	for _, e := range l.Apps {
@@ -302,7 +317,13 @@ func (h *Host) Apps() []AppView {
 		}
 		v := AppView{ID: a.ID, Name: a.Name, Group: a.Group, Description: a.Description, Repo: a.Repo,
 			Folder: h.folder(a.ID, states), Error: errs[a.ID],
-			Cloud: a.Cloud != nil, Syncing: syncing[a.ID], SyncNote: notes[a.ID]}
+			Cloud: a.Cloud != nil, Syncing: syncing[a.ID], SyncNote: notes[a.ID], Updating: updating[a.ID]}
+		if u := updates[a.ID]; u.Available {
+			v.Update = u.Detail
+			if v.Update == "" {
+				v.Update = "new version"
+			}
+		}
 		if t := states[a.ID].LastLaunched; !t.IsZero() {
 			v.LastLaunched = t.Format(time.RFC3339)
 		}
@@ -345,7 +366,7 @@ type ConfirmError struct {
 	Cloud    []string `json:"cloud,omitempty"` // files synced to Drive
 }
 
-func (e *ConfirmError) Error() string { return "confirmation needed before the first run" }
+func (e *ConfirmError) Error() string { return "confirmation needed before running these commands" }
 
 // TokenError asks the UI for a GitHub token.
 type TokenError struct{ Message string }

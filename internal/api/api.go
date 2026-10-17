@@ -37,6 +37,8 @@ func Handler(h *host.Host, ui fs.FS, port int) http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/force-stop", s.stop(true))
 	mux.HandleFunc("GET /api/apps/{id}/logs", s.logs)
 	mux.HandleFunc("POST /api/apps/{id}/sync", s.sync)
+	mux.HandleFunc("POST /api/apps/{id}/update", s.update)
+	mux.HandleFunc("POST /api/updates/check", s.checkUpdates)
 	mux.HandleFunc("GET /api/library", s.getLibrary)
 	mux.HandleFunc("PUT /api/library", s.putLibrary)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -180,6 +182,35 @@ func (s *server) stop(force bool) http.HandlerFunc {
 		a, _ := s.findApp(id)
 		writeJSON(w, 200, map[string]any{"app": a})
 	}
+}
+
+func (s *server) update(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Confirm bool   `json:"confirm"`
+		Token   string `json:"token"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	var logMu sync.Mutex
+	var lines []string
+	err := s.h.Update(r.Context(), id, body.Confirm, body.Token, func(l string) {
+		logMu.Lock()
+		lines = append(lines, l)
+		logMu.Unlock()
+	})
+	if s.handleCommonErr(w, err, lines) {
+		return
+	}
+	a, _ := s.findApp(id)
+	writeJSON(w, 200, map[string]any{"app": a, "log": lines})
+}
+
+func (s *server) checkUpdates(w http.ResponseWriter, r *http.Request) {
+	s.h.CheckUpdates(r.Context())
+	s.apps(w, r)
 }
 
 func (s *server) sync(w http.ResponseWriter, r *http.Request) {

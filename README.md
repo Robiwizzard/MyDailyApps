@@ -139,6 +139,22 @@ Then open the profile panel and click **Sign in**.
 
 The host asks only for the `drive.file` scope, so it can see **only the files it created itself**, never the rest of your Drive. That also means a `library.json` you upload to Drive by hand is invisible to it. Change the library from the profile panel instead: **Import file** saves it locally and to Drive, **Export** downloads the current one. On the first sign-in, if Drive has no library yet, the local one is uploaded.
 
+## Updates
+
+At startup the host checks every installed app for a newer version in the background. It only looks and never changes files:
+
+- **Apps installed with git:** `git fetch`, then a count of the new commits on the branch.
+- **Apps installed from a release:** a comparison of the installed release tag with the newest one on GitHub.
+
+When a newer version exists, the card shows "Update available" and an **Update** button next to **Start**. Start keeps working, so you can keep using the current version.
+
+Update works only while the app is stopped. It shows the exact steps and asks first:
+
+- **git:** `git pull --ff-only`, then the app's setup command (taken from the updated manifest). If you edited files in the app folder, the update stops instead of overwriting them.
+- **release:** the new package is unpacked next to the app and set up, then swapped in. If anything fails, the old version stays.
+
+**Check for updates** in the profile panel runs the check again. App data in `DATA_DIR` is never touched by an update.
+
 ## Running apps
 
 - **Start** opens a blank tab right away (so popup blockers allow it), starts the app with `PORT` and `DATA_DIR` set, waits until the port answers (up to about 60 seconds), then points the tab at the app.

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { AppView } from "../api";
 
-export type Busy = "installing" | "starting" | "stopping" | undefined;
+export type Busy = "installing" | "starting" | "stopping" | "updating" | undefined;
 
 interface Props {
   app: AppView;
@@ -13,6 +13,7 @@ interface Props {
   onForceStop: () => void;
   onLogs: () => void;
   onSync: () => void;
+  onUpdate: () => void;
 }
 
 const statusText: Record<string, string> = {
@@ -23,11 +24,14 @@ const statusText: Record<string, string> = {
   running: "Running",
   stopping: "Stopping…",
   syncing: "Syncing…",
+  updating: "Updating…",
 };
 
-export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync }: Props) {
+export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate }: Props) {
   const [more, setMore] = useState(false);
-  const status = busy ?? (app.syncing && (app.status === "stopped" || app.status === "starting") ? "syncing" : app.status);
+  const status =
+    busy ??
+    (app.updating ? "updating" : app.syncing && (app.status === "stopped" || app.status === "starting") ? "syncing" : app.status);
   const running = app.status === "running" || app.status === "starting";
   const initial = (app.name.trim()[0] ?? "?").toUpperCase();
 
@@ -37,10 +41,10 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
       Install
     </button>
   );
-  if (status === "installing") {
+  if (status === "installing" || status === "updating") {
     action = (
       <button type="button" className="btn btn-outline" disabled>
-        Installing…
+        {status === "updating" ? "Updating…" : "Installing…"}
       </button>
     );
   } else if (status === "syncing") {
@@ -132,12 +136,28 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
       {app.syncNote && !(error || app.error) && (
         <p className={app.syncNote.startsWith("Sync failed") ? "card-error" : "card-note"}>{app.syncNote}</p>
       )}
+      {app.update && status !== "updating" && (
+        <p className="card-update">Update available: {app.update}</p>
+      )}
       <div className="card-bottom">
         <div className={`status status-${status}`}>
           <span className="status-dot" aria-hidden="true" />
           <span>{statusText[status] ?? status}</span>
         </div>
-        {action}
+        <div className="card-actions">
+          {app.update && status !== "updating" && status !== "not_installed" && (
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={onUpdate}
+              disabled={app.status !== "stopped" || !!busy}
+              title={app.status !== "stopped" ? "Stop the app to update it" : `Update ${app.name}`}
+            >
+              Update
+            </button>
+          )}
+          {action}
+        </div>
       </div>
     </article>
   );
