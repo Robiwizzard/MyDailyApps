@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS app_state (
   last_launched INTEGER NOT NULL DEFAULT 0,
   approved      TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS sync_records (
+  app_id    TEXT NOT NULL,
+  path      TEXT NOT NULL,
+  sha256    TEXT NOT NULL,
+  remote_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (app_id, path)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -156,4 +163,58 @@ func (s *Store) SetSetting(key, value string) error {
 	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// SyncRecord is the version of one file at its last successful sync.
+type SyncRecord struct {
+	Path     string
+	SHA256   string
+	RemoteID string
+}
+
+// SyncRecords returns the last-synced versions of an app's files.
+func (s *Store) SyncRecords(appID string) (map[string]SyncRecord, error) {
+	rows, err := s.db.Query(`SELECT path, sha256, remote_id FROM sync_records WHERE app_id = ?`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]SyncRecord{}
+	for rows.Next() {
+		var r SyncRecord
+		if err := rows.Scan(&r.Path, &r.SHA256, &r.RemoteID); err != nil {
+			return nil, err
+		}
+		out[r.Path] = r
+	}
+	return out, rows.Err()
+}
+
+// PutSyncRecord stores the synced version of one file.
+func (s *Store) PutSyncRecord(appID string, r SyncRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO sync_records (app_id, path, sha256, remote_id) VALUES (?, ?, ?, ?)
+		ON CONFLICT(app_id, path) DO UPDATE SET sha256 = excluded.sha256, remote_id = excluded.remote_id`,
+		appID, r.Path, r.SHA256, r.RemoteID)
+	return err
+}
+
+// CheckpointSQLite merges a database's write-ahead log into the main file so
+// it can be copied as one file. Only call it while no app has it open.
+func CheckpointSQLite(path string) error {
+	p := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(filepath.ToSlash(path))
+	db, err := sql.Open("sqlite3", "file:"+p+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var busy, logFrames, done int
+	if err := db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &done); err != nil {
+		return err
+	}
+	if busy != 0 {
+		return errors.New("the database is still in use")
+	}
+	return nil
 }

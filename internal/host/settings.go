@@ -80,7 +80,7 @@ func (h *Host) UpdateSettings(ctx context.Context, u SettingsUpdate) error {
 		if pic != "" {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
-			if err := h.Drive.Upload(ctx, pictureFile, "text/plain", []byte(pic)); err != nil {
+			if err := h.Drive.UploadFile(ctx, pictureFile, "text/plain", []byte(pic)); err != nil {
 				return fmt.Errorf("saved locally, but the Drive copy failed: %w", err)
 			}
 		}

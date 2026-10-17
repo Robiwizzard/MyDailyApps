@@ -87,6 +87,43 @@ Before an app runs for the first time, the host shows the exact install and star
 
 Private repositories: if a clone or release download needs authentication, the host asks for a GitHub token. It is kept in memory for the session only and never saved.
 
+## App manifests (`mydailyapps.json`)
+
+An app can describe itself in a `mydailyapps.json` file in its repository root: name, group, description, install options, port, and which files to keep in the cloud. The library entry can then be just:
+
+```json
+{ "id": "cookbook", "repo": "https://github.com/OWNER/cookbook" }
+```
+
+- Any field set in the library entry overrides the manifest.
+- An installed app's manifest is read from its folder. Before installing, the host fetches it from the GitHub repository (default branch) and caches it in the data folder.
+- A manifest has the same fields as a library entry, plus `"manifestVersion": 1` and an optional `cloud` section (below).
+
+## Cloud saves
+
+Like Steam Cloud, the host keeps an app's data in Google Drive without the app talking to Google. The app's manifest (or library entry) lists which files under its `DATA_DIR` to sync:
+
+```json
+"cloud": {
+  "include": ["cookbook.db", "images/**"],
+  "exclude": ["images/cache/**"],
+  "sqlite": ["cookbook.db"],
+  "maxSizeMB": 500
+}
+```
+
+How it works:
+
+- **Before Start**, newer files are downloaded from `MyDailyApps/apps/<id>/` in Drive.
+- **After the app exits**, files that changed are uploaded. SQLite databases listed under `sqlite` have their write-ahead log merged first, and are never copied while the app runs.
+- **Sync now** (under the card's `⋯` button) does both while the app is stopped. The card shows the result of the last sync.
+- **Conflicts**: if a file changed both on this computer and in Drive since the last sync, the newer copy wins. The other copy is saved to `MyDailyApps/backups/<id>/` in Drive with the date and where it came from.
+- **What isn't synced**: deleting a file is not synced yet, so a file deleted on one computer comes back from the cloud. Patterns can't leave `DATA_DIR`. SQLite `-wal`/`-shm` files are never synced.
+- **Size limit**: if the matched files are larger than `maxSizeMB`, nothing is uploaded and the card says why.
+- **Errors**: if Drive can't be reached, the app starts with the local copy and the card shows the problem.
+
+The first-run confirmation lists the synced patterns too, so you see what an app will keep in your Drive before it runs.
+
 ## Google Drive
 
 Drive keeps the library (and optionally your profile picture) so a fresh computer can restore it after you sign in. The sign-in token stays on the computer and is never synced.
@@ -116,7 +153,7 @@ The app contract is small: read `PORT` and `DATA_DIR` from the environment, list
 `kit/` is a separate Go module with helpers:
 
 - `kit.Load(appID, defaultPort)`: `PORT`, `DATA_DIR`, and the same guest/persistent pattern as the host when started by hand.
-- `kit.Storage` with `LocalStorage` and `DriveStorage` (keeps data in `Apps/<app-id>/` in Drive).
+- `kit.Storage` with `LocalStorage` and `DriveStorage` (keeps data in `Apps/<app-id>/` in Drive). Most apps don't need this: listing files in the manifest's `cloud` section lets the host sync them.
 - `kit.Snapshots`: timestamped copies, keep the last N, and `RestoreIfNewer` for a startup check.
 - `kit.LoopbackLogin` and `kit.FileTokenSource` for the app's own Google sign-in.
 
@@ -133,8 +170,9 @@ cmd/mydailyapps/     entry point: config, state file, server, shutdown path
 internal/config/     env + mydailyapps.env, guest/persistent folders
 internal/state/      local SQLite: app paths, last launched, approvals, settings, Drive token
 internal/library/    library file model, validation, local cache
-internal/drive/      Google OAuth (loopback redirect, PKCE) and Drive file calls
-internal/install/    folder scan, requirement checks, git clone, release download/unpack
+internal/drive/      Google OAuth (loopback redirect, PKCE) and Drive file calls, app folders and backups
+internal/install/    folder scan, requirement checks, git clone, release download/unpack, manifest fetch
+internal/cloudsync/  Steam-style file sync of app data (pull before start, push after exit)
 internal/procs/      launch, ready check, stop, tree kill, state file (procs_windows.go, procs_unix.go)
 internal/host/       ties it together (used by the HTTP layer)
 internal/api/        HTTP handlers and the embedded UI

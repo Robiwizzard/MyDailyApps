@@ -32,6 +32,9 @@ type Spec struct {
 	Port    int    // 0 = pick a free port
 	Path    string // URL path to open
 	Env     []string
+	// OnExit runs once the whole process tree is gone, before Stop returns.
+	// It must not block for long (start a goroutine for slow work).
+	OnExit func()
 }
 
 // Proc is one running app.
@@ -182,12 +185,15 @@ func (m *Manager) Start(ctx context.Context, s Spec) (string, error) {
 		// Children may still hold the port: make sure the tree is gone.
 		m.platform.kill(p)
 		m.platform.release(p)
-		close(p.done)
 		m.mu.Lock()
 		if m.procs[s.ID] == p {
 			delete(m.procs, s.ID)
 		}
 		m.mu.Unlock()
+		if s.OnExit != nil {
+			s.OnExit()
+		}
+		close(p.done)
 		m.saveState()
 		m.onChange()
 	}()

@@ -64,6 +64,7 @@ type Service struct {
 	mu       sync.Mutex
 	pending  map[string]string // state -> PKCE verifier
 	folderID string
+	children map[string]string // "parentID/name" -> folder id
 	email    string
 }
 
@@ -154,7 +155,7 @@ func (s *Service) Disconnect(ctx context.Context) error {
 		}
 	}
 	s.mu.Lock()
-	s.folderID, s.email = "", ""
+	s.folderID, s.email, s.children = "", "", nil
 	s.mu.Unlock()
 	return s.store.SaveToken(nil)
 }
@@ -208,13 +209,31 @@ func doJSON(c *http.Client, req *http.Request, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Drive answered %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return driveError(resp)
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// driveError turns a Drive error response into a short message: Google's
+// own one-line explanation instead of the whole JSON body.
+func driveError(resp *http.Response) error {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	msg := strings.TrimSpace(string(b))
+	if json.Unmarshal(b, &e) == nil && e.Error.Message != "" {
+		msg = e.Error.Message
+	}
+	if len(msg) > 400 {
+		msg = msg[:400] + "…"
+	}
+	return fmt.Errorf("Drive answered %s: %s", resp.Status, msg)
 }
 
 func escapeQ(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `'`, `\'`) }
@@ -285,8 +304,8 @@ func (s *Service) Hello(ctx context.Context) error {
 	return nil
 }
 
-// Download returns a file from the folder, or (nil, nil) if it does not exist.
-func (s *Service) Download(ctx context.Context, name string) ([]byte, error) {
+// DownloadFile returns a file from the folder, or (nil, nil) if it does not exist.
+func (s *Service) DownloadFile(ctx context.Context, name string) ([]byte, error) {
 	c, err := s.client(ctx)
 	if err != nil {
 		return nil, err
@@ -306,13 +325,13 @@ func (s *Service) Download(ctx context.Context, name string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Drive answered %s", resp.Status)
+		return nil, driveError(resp)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 }
 
-// Upload creates or replaces a file in the folder.
-func (s *Service) Upload(ctx context.Context, name, mimeType string, data []byte) error {
+// UploadFile creates or replaces a file in the folder.
+func (s *Service) UploadFile(ctx context.Context, name, mimeType string, data []byte) error {
 	c, err := s.client(ctx)
 	if err != nil {
 		return err

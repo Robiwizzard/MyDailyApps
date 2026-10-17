@@ -14,6 +14,9 @@ export interface AppView {
   folder: string;
   lastLaunched?: string;
   error?: string;
+  cloud: boolean;
+  syncing?: boolean;
+  syncNote?: string;
 }
 
 export interface AppsResponse {
@@ -53,6 +56,7 @@ export interface ConfirmInfo {
   folder: string;
   commands: string[];
   launch: string;
+  cloud?: string[];
 }
 
 /** Error from the API, with the extra fields some endpoints return. */
@@ -102,6 +106,7 @@ export const api = {
     request<{ url: string }>("POST", `/api/apps/${enc(id)}/launch`, { confirm }),
   stop: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/stop`),
   forceStop: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/force-stop`),
+  sync: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/sync`),
   logs: (id: string) => request<{ lines: string[] }>("GET", `/api/apps/${enc(id)}/logs`),
   settings: () => request<Settings>("GET", "/api/settings"),
   saveSettings: (u: {

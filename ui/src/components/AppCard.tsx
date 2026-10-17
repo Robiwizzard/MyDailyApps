@@ -12,6 +12,7 @@ interface Props {
   onStop: () => void;
   onForceStop: () => void;
   onLogs: () => void;
+  onSync: () => void;
 }
 
 const statusText: Record<string, string> = {
@@ -21,11 +22,12 @@ const statusText: Record<string, string> = {
   starting: "Starting…",
   running: "Running",
   stopping: "Stopping…",
+  syncing: "Syncing…",
 };
 
-export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs }: Props) {
+export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync }: Props) {
   const [more, setMore] = useState(false);
-  const status = busy ?? app.status;
+  const status = busy ?? (app.syncing && (app.status === "stopped" || app.status === "starting") ? "syncing" : app.status);
   const running = app.status === "running" || app.status === "starting";
   const initial = (app.name.trim()[0] ?? "?").toUpperCase();
 
@@ -39,6 +41,12 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
     action = (
       <button type="button" className="btn btn-outline" disabled>
         Installing…
+      </button>
+    );
+  } else if (status === "syncing") {
+    action = (
+      <button type="button" className="btn btn-primary" disabled>
+        Syncing…
       </button>
     );
   } else if (app.status === "stopped" && !busy) {
@@ -104,6 +112,11 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
           <button type="button" className="btn btn-ghost" onClick={onLogs}>
             Logs
           </button>
+          {app.cloud && app.status === "stopped" && (
+            <button type="button" className="btn btn-ghost" onClick={onSync} disabled={!!app.syncing}>
+              Sync now
+            </button>
+          )}
           {running && (
             <button type="button" className="btn btn-ghost btn-danger" onClick={onForceStop}>
               Force stop
@@ -115,6 +128,9 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
         <p className="card-error" role="alert">
           {error || app.error}
         </p>
+      )}
+      {app.syncNote && !(error || app.error) && (
+        <p className={app.syncNote.startsWith("Sync failed") ? "card-error" : "card-note"}>{app.syncNote}</p>
       )}
       <div className="card-bottom">
         <div className={`status status-${status}`}>

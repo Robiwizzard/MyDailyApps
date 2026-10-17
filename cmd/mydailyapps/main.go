@@ -157,6 +157,14 @@ func run() error {
 		procs.StopGrace = 2 * time.Second
 	}
 	h.Procs.StopAll(false)
+	// Apps upload their changed files after they exit; give that time to finish.
+	syncWait := 60 * time.Second
+	if fromSignal {
+		syncWait = 4 * time.Second
+	}
+	if !h.WaitSyncs(syncWait) {
+		log.Print("some cloud uploads did not finish; they will be uploaded after the app's next run")
+	}
 	shutCtx, done := context.WithTimeout(context.Background(), 2*time.Second)
 	_ = srv.Shutdown(shutCtx)
 	done()

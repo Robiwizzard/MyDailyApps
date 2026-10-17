@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/robiwizzard/mydailyapps/internal/cloudsync"
 	"github.com/robiwizzard/mydailyapps/internal/config"
 	"github.com/robiwizzard/mydailyapps/internal/drive"
 	"github.com/robiwizzard/mydailyapps/internal/install"
@@ -41,9 +42,15 @@ type Host struct {
 	Lib   *library.Cache
 	Drive *drive.Service
 	Procs *procs.Manager
+	Sync  *cloudsync.Syncer
 
 	mu         sync.Mutex
+	resolved   map[string]library.App // library entry merged with the app's manifest
 	scan       map[string]install.ScanResult
+	syncLocks  map[string]*sync.Mutex
+	syncing    map[string]bool
+	syncNote   map[string]string
+	syncWG     sync.WaitGroup
 	installing map[string]bool
 	installErr map[string]string
 	steps      []Step
@@ -61,11 +68,13 @@ type Host struct {
 func New(cfg *config.Config, store *state.Store, sf *procs.StateFile) (*Host, error) {
 	h := &Host{
 		Cfg: cfg, Store: store, Lib: library.NewCache(cfg.DataDir),
+		resolved: map[string]library.App{}, syncLocks: map[string]*sync.Mutex{}, syncing: map[string]bool{}, syncNote: map[string]string{},
 		scan: map[string]install.ScanResult{}, installing: map[string]bool{}, installErr: map[string]string{},
 		tokens: map[string]string{}, ShutdownCh: make(chan struct{}),
 		steps: []Step{
 			{ID: "signin", Label: "Signing in to Google Drive", State: "pending"},
 			{ID: "library", Label: "Fetching the library", State: "pending"},
+			{ID: "manifests", Label: "Reading app manifests", State: "pending"},
 			{ID: "scan", Label: "Scanning installed apps", State: "pending"},
 		},
 	}
@@ -76,6 +85,7 @@ func New(cfg *config.Config, store *state.Store, sf *procs.StateFile) (*Host, er
 		return nil, err
 	}
 	h.Procs = m
+	h.Sync = &cloudsync.Syncer{Remote: h.Drive, Records: syncRecords{store}, Checkpoint: state.CheckpointSQLite}
 	return h, nil
 }
 
@@ -161,6 +171,9 @@ func (h *Host) Startup(ctx context.Context) {
 		h.setStep("library", "done", h.libraryDetail())
 	}
 
+	h.setStep("manifests", "running", "")
+	h.setStep("manifests", "done", h.RefreshManifests(ctx))
+
 	h.setStep("scan", "running", h.Cfg.AppsDir)
 	h.Rescan()
 	h.setStep("scan", "done", h.scanDetail())
@@ -193,7 +206,7 @@ func (h *Host) scanDetail() string {
 func (h *Host) SyncLibraryFromDrive(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	b, err := h.Drive.Download(ctx, library.FileName)
+	b, err := h.Drive.DownloadFile(ctx, library.FileName)
 	if err != nil {
 		return err
 	}
@@ -201,7 +214,7 @@ func (h *Host) SyncLibraryFromDrive(ctx context.Context) error {
 		l, _ := h.Lib.Get()
 		if len(l.Apps) > 0 {
 			data, _ := l.Marshal()
-			return h.Drive.Upload(ctx, library.FileName, "application/json", data)
+			return h.Drive.UploadFile(ctx, library.FileName, "application/json", data)
 		}
 		return nil
 	}
@@ -217,7 +230,7 @@ func (h *Host) SyncLibraryFromDrive(ctx context.Context) error {
 	h.mu.Unlock()
 	// Restore the profile picture if this machine has none.
 	if pic, _ := h.Store.Setting("profile_picture"); pic == "" {
-		if p, err := h.Drive.Download(ctx, pictureFile); err == nil && p != nil && validPicture(string(p)) == nil {
+		if p, err := h.Drive.DownloadFile(ctx, pictureFile); err == nil && p != nil && validPicture(string(p)) == nil {
 			_ = h.Store.SetSetting("profile_picture", string(p))
 		}
 	}
@@ -230,11 +243,16 @@ func (h *Host) Rescan() {
 	l, _ := h.Lib.Get()
 	states, _ := h.Store.Apps()
 	res := map[string]install.ScanResult{}
-	for _, a := range l.Apps {
-		res[a.ID] = install.Scan(a, h.folder(a.ID, states))
+	resolved := map[string]library.App{}
+	for _, e := range l.Apps {
+		dir := h.folder(e.ID, states)
+		a := library.Merge(e, h.manifestFor(e.ID, dir))
+		resolved[e.ID] = a
+		res[e.ID] = install.Scan(a, dir)
 	}
 	h.mu.Lock()
 	h.scan = res
+	h.resolved = resolved
 	h.mu.Unlock()
 	h.bump()
 }
@@ -259,6 +277,9 @@ type AppView struct {
 	Folder       string `json:"folder"`
 	LastLaunched string `json:"lastLaunched,omitempty"`
 	Error        string `json:"error,omitempty"`
+	Cloud        bool   `json:"cloud"`              // the app syncs data to Drive
+	Syncing      bool   `json:"syncing,omitempty"`  // a sync is running now
+	SyncNote     string `json:"syncNote,omitempty"` // result or problem of the last sync
 }
 
 // Apps merges the library with the scan and running state. Never installs.
@@ -267,13 +288,21 @@ func (h *Host) Apps() []AppView {
 	states, _ := h.Store.Apps()
 	h.mu.Lock()
 	scan := h.scan
-	installing := h.installing
-	errs := h.installErr
+	installing := copyBools(h.installing)
+	errs := copyStrings(h.installErr)
+	resolved := h.resolved
+	syncing := copyBools(h.syncing)
+	notes := copyStrings(h.syncNote)
 	h.mu.Unlock()
 	out := make([]AppView, 0, len(l.Apps))
-	for _, a := range l.Apps {
+	for _, e := range l.Apps {
+		a, ok := resolved[e.ID]
+		if !ok {
+			a = library.Merge(e, nil)
+		}
 		v := AppView{ID: a.ID, Name: a.Name, Group: a.Group, Description: a.Description, Repo: a.Repo,
-			Folder: h.folder(a.ID, states), Error: errs[a.ID]}
+			Folder: h.folder(a.ID, states), Error: errs[a.ID],
+			Cloud: a.Cloud != nil, Syncing: syncing[a.ID], SyncNote: notes[a.ID]}
 		if t := states[a.ID].LastLaunched; !t.IsZero() {
 			v.LastLaunched = t.Format(time.RFC3339)
 		}
@@ -293,13 +322,15 @@ func (h *Host) Apps() []AppView {
 	return out
 }
 
+// app returns the library entry merged with the app's manifest.
 func (h *Host) app(id string) (library.App, error) {
 	l, _ := h.Lib.Get()
-	a, ok := l.Find(id)
+	e, ok := l.Find(id)
 	if !ok {
-		return a, ErrNotFound
+		return e, ErrNotFound
 	}
-	return a, nil
+	s, _ := h.Store.App(id)
+	return library.Merge(e, h.manifestFor(id, install.Folder(h.Cfg.AppsDir, s.InstallPath, id))), nil
 }
 
 // ErrNotFound means the id is not in the library.
@@ -311,6 +342,7 @@ type ConfirmError struct {
 	Folder   string   `json:"folder"`
 	Commands []string `json:"commands"`
 	Launch   string   `json:"launch"`
+	Cloud    []string `json:"cloud,omitempty"` // files synced to Drive
 }
 
 func (e *ConfirmError) Error() string { return "confirmation needed before the first run" }
@@ -388,6 +420,15 @@ func (h *Host) Install(ctx context.Context, id string, confirm bool, token strin
 	}()
 
 	opt := install.Options{Token: h.tokenFor(a.Repo, token)}
+	if len(a.Install) == 0 || token != "" {
+		// No install options yet: read them from the repo's manifest.
+		if err := h.fetchManifest(ctx, a, opt.Token); errors.Is(err, install.ErrNeedsToken) {
+			return &TokenError{Message: "This app's repository looks private. Enter a GitHub token to install it (used for this session only)."}
+		}
+		if a, err = h.app(id); err != nil {
+			return err
+		}
+	}
 	plan, err := install.MakePlan(ctx, a, dir, opt)
 	if errors.Is(err, install.ErrNeedsToken) {
 		return &TokenError{Message: "This app's repository or release looks private. Enter a GitHub token to install it (used for this session only)."}
@@ -399,7 +440,7 @@ func (h *Host) Install(ctx context.Context, id string, confirm bool, token strin
 		return &MissingError{Missing: plan.Missing, Problems: plan.Problems}
 	}
 	if !confirm {
-		return &ConfirmError{Kind: "install", Folder: dir, Commands: plan.Commands, Launch: plan.Launch}
+		return &ConfirmError{Kind: "install", Folder: dir, Commands: plan.Commands, Launch: plan.Launch, Cloud: cloudList(a.Cloud)}
 	}
 	err = install.Run(ctx, a, plan, opt, log)
 	if errors.Is(err, install.ErrNeedsToken) {
@@ -411,8 +452,8 @@ func (h *Host) Install(ctx context.Context, id string, confirm bool, token strin
 		h.mu.Unlock()
 		return err
 	}
-	// The user saw and confirmed the launch command too.
-	_ = h.Store.SetApproved(id, approvalKey(dir, plan.Launch))
+	// The user saw and confirmed the launch command (and synced files) too.
+	_ = h.Store.SetApproved(id, approvalKey(dir, plan.Launch, cloudList(h.manifestMerged(id, dir).Cloud)...))
 	return nil
 }
 
@@ -432,18 +473,25 @@ func (h *Host) Launch(ctx context.Context, id string, confirm bool) (string, err
 	if r.Launch == "" {
 		return "", errors.New("the library entry has no launch command")
 	}
-	key := approvalKey(dir, r.Launch)
+	key := approvalKey(dir, r.Launch, cloudList(a.Cloud)...)
 	if s.Approved != key {
 		if !confirm {
-			return "", &ConfirmError{Kind: "launch", Folder: dir, Commands: []string{r.Launch}, Launch: r.Launch}
+			return "", &ConfirmError{Kind: "launch", Folder: dir, Commands: []string{r.Launch}, Launch: r.Launch, Cloud: cloudList(a.Cloud)}
 		}
 		_ = h.Store.SetApproved(id, key)
 	}
 	dataDir := h.Cfg.AppDataDir(id)
 	_ = os.MkdirAll(dataDir, 0o700)
+	if st, _ := h.Procs.Status(id); st == "" {
+		// Steam-style: bring newer cloud files down before the app starts.
+		h.syncApp(ctx, id, dataDir, a.Cloud, pull)
+	}
+	cloud := a.Cloud
 	url, err := h.Procs.Start(ctx, procs.Spec{
 		ID: id, Dir: dir, Command: r.Launch, Port: a.Port, Path: a.Path,
 		Env: []string{"DATA_DIR=" + dataDir, "MYDAILYAPPS_MODE=" + string(h.Cfg.Mode), "MYDAILYAPPS_HOST=http://localhost:" + fmt.Sprint(h.Cfg.Port)},
+		// After the app exits, upload what changed.
+		OnExit: func() { h.syncAppAsync(id, dataDir, cloud, push) },
 	})
 	if err != nil {
 		return "", err
@@ -480,7 +528,7 @@ func (h *Host) ImportLibrary(ctx context.Context, b []byte) error {
 		data, _ := l.Marshal()
 		ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
-		if err := h.Drive.Upload(ctx, library.FileName, "application/json", data); err != nil {
+		if err := h.Drive.UploadFile(ctx, library.FileName, "application/json", data); err != nil {
 			return fmt.Errorf("saved locally, but saving to Drive failed: %w", err)
 		}
 	}
@@ -494,10 +542,12 @@ func (h *Host) RequestShutdown() {
 
 // Sorted helper for groups.
 func (h *Host) Groups() []string {
-	l, _ := h.Lib.Get()
+	h.mu.Lock()
+	resolved := h.resolved
+	h.mu.Unlock()
 	seen := map[string]bool{}
 	out := []string{}
-	for _, a := range l.Apps {
+	for _, a := range resolved {
 		if a.Group != "" && !seen[a.Group] {
 			seen[a.Group] = true
 			out = append(out, a.Group)

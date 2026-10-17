@@ -128,6 +128,7 @@ a.card-name:hover { color: var(--accent-text); text-decoration: underline; }
 .card-desc { margin: 0; color: var(--text-2); font-size: 14px; }
 .card-more { margin-left: auto; }
 .card-extra { display: flex; flex-wrap: wrap; gap: 8px; }
+.card-note { margin: 0; color: var(--muted); font-size: 13px; }
 .card-error { margin: 0; color: var(--danger); font-size: 14px; white-space: pre-wrap; }
 .card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; }
 
@@ -138,7 +139,8 @@ a.card-name:hover { color: var(--accent-text); text-decoration: underline; }
 .status-starting .status-dot, .status-installing .status-dot, .status-stopping .status-dot {
   background: var(--accent-soft); animation: pulse 1s ease-in-out infinite alternate;
 }
-.status-starting, .status-installing { color: var(--accent-text); }
+.status-starting, .status-installing, .status-syncing { color: var(--accent-text); }
+.status-syncing .status-dot { background: var(--accent-soft); animation: pulse 1s ease-in-out infinite alternate; }
 .status-not_installed .status-dot { width: 10px; height: 10px; background: none; border: 2px solid var(--dim); }
 
 @keyframes pulse { from { opacity: 0.35; } to { opacity: 1; } }

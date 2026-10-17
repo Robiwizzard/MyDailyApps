@@ -166,6 +166,16 @@ export function App() {
     }
   };
 
+  const syncNow = async (app: AppView) => {
+    setAppError(app.id);
+    try {
+      const r = await api.sync(app.id);
+      replaceApp(r.app);
+    } catch (e) {
+      setAppError(app.id, (e as Error).message);
+    }
+  };
+
   const showLogs = async (app: AppView) => {
     try {
       const r = await api.logs(app.id);
@@ -292,6 +302,7 @@ export function App() {
                 onStop={() => stop(a, false)}
                 onForceStop={() => stop(a, true)}
                 onLogs={() => showLogs(a)}
+                onSync={() => syncNow(a)}
               />
             ))}
           </div>
@@ -380,6 +391,12 @@ function ConfirmDialog({ info, app, onCancel, onConfirm }: { info: ConfirmInfo; 
       )}
       <h3 className="small-h">Start command</h3>
       <pre className="log">{info.launch}</pre>
+      {info.cloud && info.cloud.length > 0 && (
+        <>
+          <h3 className="small-h">Files kept in your Google Drive (inside the app's data folder)</h3>
+          <pre className="log">{info.cloud.join("\n")}</pre>
+        </>
+      )}
       <div className="modal-actions">
         <button type="button" className="btn btn-quiet" onClick={onCancel}>
           Cancel

@@ -128,8 +128,11 @@ type Options struct {
 
 // MakePlan picks the first install option that works on this machine.
 func MakePlan(ctx context.Context, app library.App, dir string, opt Options) (*Plan, error) {
+	if app.Repo == "" {
+		return &Plan{Option: -1, Folder: dir, Problems: []string{"the library entry has no repo to install from"}}, nil
+	}
 	if len(app.Install) == 0 {
-		return &Plan{Option: -1, Folder: dir, Problems: []string{"the library entry has no install options"}}, nil
+		return &Plan{Option: -1, Folder: dir, Problems: []string{"no install options: add a mydailyapps.json to the app's repository, or install options to its library entry"}}, nil
 	}
 	var problems, missing []string
 	needsToken := false

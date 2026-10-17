@@ -86,16 +86,16 @@ func TestUploadDownload(t *testing.T) {
 	st := &memStore{t: &oauth2.Token{AccessToken: "tok", Expiry: time.Now().Add(time.Hour)}}
 	s := New("client", "secret", "http://127.0.0.1/cb", st)
 	ctx := context.Background()
-	if b, err := s.Download(ctx, "library.json"); err != nil || b != nil {
+	if b, err := s.DownloadFile(ctx, "library.json"); err != nil || b != nil {
 		t.Fatalf("expected no file: %v %q", err, b)
 	}
-	if err := s.Upload(ctx, "library.json", "application/json", []byte(`{"v":1}`)); err != nil {
+	if err := s.UploadFile(ctx, "library.json", "application/json", []byte(`{"v":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(ctx, "library.json", "application/json", []byte(`{"v":2}`)); err != nil {
+	if err := s.UploadFile(ctx, "library.json", "application/json", []byte(`{"v":2}`)); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Download(ctx, "library.json")
+	b, err := s.DownloadFile(ctx, "library.json")
 	if err != nil || string(b) != `{"v":2}` {
 		t.Fatalf("got %q %v", b, err)
 	}

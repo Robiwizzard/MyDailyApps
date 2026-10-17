@@ -71,6 +71,8 @@ func findRelease(ctx context.Context, repo string, o library.InstallOption, toke
 		return nil, fmt.Errorf("no release found (if the repo is private, a token is needed): %w", ErrNeedsToken)
 	case resp.StatusCode == 404:
 		return nil, errors.New("no release found")
+	case rateLimited(resp):
+		return nil, errRateLimited
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		return nil, fmt.Errorf("GitHub refused the request (%s): %w", resp.Status, ErrNeedsToken)
 	case resp.StatusCode != 200:

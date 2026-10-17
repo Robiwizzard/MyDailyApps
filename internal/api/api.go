@@ -36,6 +36,7 @@ func Handler(h *host.Host, ui fs.FS, port int) http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/stop", s.stop(false))
 	mux.HandleFunc("POST /api/apps/{id}/force-stop", s.stop(true))
 	mux.HandleFunc("GET /api/apps/{id}/logs", s.logs)
+	mux.HandleFunc("POST /api/apps/{id}/sync", s.sync)
 	mux.HandleFunc("GET /api/library", s.getLibrary)
 	mux.HandleFunc("PUT /api/library", s.putLibrary)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -179,6 +180,20 @@ func (s *server) stop(force bool) http.HandlerFunc {
 		a, _ := s.findApp(id)
 		writeJSON(w, 200, map[string]any{"app": a})
 	}
+}
+
+func (s *server) sync(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.h.SyncNow(r.Context(), id); err != nil {
+		if errors.Is(err, host.ErrNotFound) {
+			writeErr(w, 404, err)
+		} else {
+			writeErr(w, 409, err)
+		}
+		return
+	}
+	a, _ := s.findApp(id)
+	writeJSON(w, 200, map[string]any{"app": a})
 }
 
 func (s *server) logs(w http.ResponseWriter, r *http.Request) {

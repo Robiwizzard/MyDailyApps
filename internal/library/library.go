@@ -29,16 +29,27 @@ type InstallOption struct {
 	Tag string `json:"tag,omitempty"`
 }
 
-// App is one library entry.
+// App is one library entry. The same fields appear in an app's own
+// mydailyapps.json manifest; a library entry can be as small as id + repo,
+// and any field it does set overrides the manifest.
 type App struct {
 	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Group       string          `json:"group"`
+	Name        string          `json:"name,omitempty"`
+	Group       string          `json:"group,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Repo        string          `json:"repo,omitempty"`
 	Port        int             `json:"port,omitempty"` // fixed port, if the app cannot read PORT
 	Path        string          `json:"path,omitempty"` // URL path to open, default "/"
-	Install     []InstallOption `json:"install"`
+	Install     []InstallOption `json:"install,omitempty"`
+	Cloud       *Cloud          `json:"cloud,omitempty"`
+}
+
+// Cloud lists the files under the app's DATA_DIR that are synced to Drive.
+type Cloud struct {
+	Include   []string `json:"include"`
+	Exclude   []string `json:"exclude,omitempty"`
+	SQLite    []string `json:"sqlite,omitempty"`
+	MaxSizeMB int      `json:"maxSizeMB,omitempty"`
 }
 
 // Library is the whole file.
@@ -61,25 +72,124 @@ func (l *Library) Validate() error {
 			return fmt.Errorf("%s: duplicate id", where)
 		}
 		seen[a.ID] = true
-		if strings.TrimSpace(a.Name) == "" {
-			return fmt.Errorf("%s: name is required", where)
-		}
-		if a.Port < 0 || a.Port > 65535 {
-			return fmt.Errorf("%s: port out of range", where)
-		}
-		for j, o := range a.Install {
-			if o.Type != "release" && o.Type != "git" {
-				return fmt.Errorf("%s install option %d: type must be release or git", where, j+1)
-			}
-			if strings.TrimSpace(o.Launch) == "" {
-				return fmt.Errorf("%s install option %d: launch is required", where, j+1)
-			}
-			if a.Repo == "" {
-				return fmt.Errorf("%s: repo is required for %s installs", where, o.Type)
-			}
+		if err := a.validateFields(where); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// validateFields checks the fields both library entries and manifests share.
+func (a *App) validateFields(where string) error {
+	if a.Port < 0 || a.Port > 65535 {
+		return fmt.Errorf("%s: port out of range", where)
+	}
+	for j, o := range a.Install {
+		if o.Type != "release" && o.Type != "git" {
+			return fmt.Errorf("%s install option %d: type must be release or git", where, j+1)
+		}
+		if strings.TrimSpace(o.Launch) == "" {
+			return fmt.Errorf("%s install option %d: launch is required", where, j+1)
+		}
+	}
+	if a.Cloud != nil {
+		if err := a.Cloud.Validate(); err != nil {
+			return fmt.Errorf("%s: cloud: %w", where, err)
+		}
+	}
+	return nil
+}
+
+// Validate checks that every pattern stays inside DATA_DIR.
+func (c *Cloud) Validate() error {
+	if len(c.Include) == 0 {
+		return errors.New("include must list at least one pattern")
+	}
+	all := append(append(append([]string{}, c.Include...), c.Exclude...), c.SQLite...)
+	for _, p := range all {
+		if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, "\\") || filepath.IsAbs(p) ||
+			strings.Contains(p, ":") {
+			return fmt.Errorf("%q must be a relative path with forward slashes", p)
+		}
+		for _, seg := range strings.Split(p, "/") {
+			if seg == ".." || seg == "." {
+				return fmt.Errorf("%q must not contain . or .. segments", p)
+			}
+		}
+	}
+	if c.MaxSizeMB < 0 {
+		return errors.New("maxSizeMB must not be negative")
+	}
+	return nil
+}
+
+// Merge returns the manifest with every field the library entry sets laid
+// over it. Either may be nil-ish (zero App).
+func Merge(entry App, manifest *App) App {
+	if manifest == nil {
+		out := entry
+		if out.Name == "" {
+			out.Name = out.ID
+		}
+		return out
+	}
+	out := *manifest
+	out.ID = entry.ID
+	if entry.Name != "" {
+		out.Name = entry.Name
+	}
+	if entry.Group != "" {
+		out.Group = entry.Group
+	}
+	if entry.Description != "" {
+		out.Description = entry.Description
+	}
+	if entry.Repo != "" {
+		out.Repo = entry.Repo
+	}
+	if entry.Port != 0 {
+		out.Port = entry.Port
+	}
+	if entry.Path != "" {
+		out.Path = entry.Path
+	}
+	if len(entry.Install) > 0 {
+		out.Install = entry.Install
+	}
+	if entry.Cloud != nil {
+		out.Cloud = entry.Cloud
+	}
+	if out.Name == "" {
+		out.Name = out.ID
+	}
+	return out
+}
+
+// ManifestName is the file an app ships in its repository root.
+const ManifestName = "mydailyapps.json"
+
+// Manifest is an app's own description of itself.
+type Manifest struct {
+	ManifestVersion int `json:"manifestVersion"`
+	App
+}
+
+// ParseManifest decodes and validates a mydailyapps.json file.
+func ParseManifest(b []byte) (*App, error) {
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("%s is not valid JSON: %w", ManifestName, err)
+	}
+	if m.ManifestVersion > 1 {
+		return nil, fmt.Errorf("%s uses manifestVersion %d; this MyDailyApps understands version 1", ManifestName, m.ManifestVersion)
+	}
+	if m.ID != "" && !idRe.MatchString(m.ID) {
+		return nil, fmt.Errorf("%s: invalid id %q", ManifestName, m.ID)
+	}
+	if err := m.App.validateFields(ManifestName); err != nil {
+		return nil, err
+	}
+	return &m.App, nil
 }
 
 // Find returns the app with the id.
