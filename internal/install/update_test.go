@@ -114,6 +114,8 @@ func TestReleaseUpdate(t *testing.T) {
 	if st, _ := CheckUpdate(ctx, app, dir, ""); st.Available {
 		t.Fatal("no update expected yet")
 	}
+	os.MkdirAll(filepath.Join(dir, "saves"), 0o755)
+	os.WriteFile(filepath.Join(dir, "saves", "slot.json"), []byte("mine"), 0o644) // written by the app
 	tag, data = "v2", mkzip("two")
 	st, err := CheckUpdate(ctx, app, dir, "")
 	if err != nil || !st.Available || st.Detail != "v1 → v2" {
@@ -124,6 +126,9 @@ func TestReleaseUpdate(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "tracker")); string(b) != "two" {
 		t.Fatalf("got %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "saves", "slot.json")); string(b) != "mine" {
+		t.Fatal("the app's own file was lost in the update")
 	}
 	if m, _ := ReadMarker(dir); m.ReleaseTag != "v2" {
 		t.Fatalf("marker tag %q", m.ReleaseTag)

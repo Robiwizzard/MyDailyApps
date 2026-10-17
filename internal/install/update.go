@@ -160,6 +160,11 @@ func updateRelease(ctx context.Context, app library.App, m Marker, dir, token st
 		os.RemoveAll(staging)
 		return err
 	}
+	// Keep files the app created in its own folder (data next to the code).
+	if err := copyMissing(dir, staging); err != nil {
+		os.RemoveAll(staging)
+		return fmt.Errorf("keeping the app's own files: %w", err)
+	}
 	if err := runSetup(ctx, staging, setupAfter(), log); err != nil {
 		os.RemoveAll(staging)
 		return err
@@ -183,6 +188,37 @@ func updateRelease(ctx context.Context, app library.App, m Marker, dir, token st
 	_ = os.RemoveAll(old)
 	log("updated to " + a.Tag)
 	return nil
+}
+
+// copyMissing copies every file from old that the new package does not have.
+func copyMissing(old, staging string) error {
+	return filepath.WalkDir(old, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(old, p)
+		if rel == MarkerName {
+			return nil
+		}
+		dst := filepath.Join(staging, rel)
+		if _, err := os.Lstat(dst); err == nil {
+			return nil // the new version ships this file
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		in, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		st, _ := d.Info()
+		mode := os.FileMode(0o644)
+		if st != nil {
+			mode = st.Mode().Perm()
+		}
+		return writeFile(dst, in, mode)
+	})
 }
 
 func runSetup(ctx context.Context, dir, setup string, log func(string)) error {

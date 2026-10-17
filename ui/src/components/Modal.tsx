@@ -11,6 +11,12 @@ interface Props {
 export function Modal({ title, onClose, children, wide }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // The parent passes a new onClose on every render (the page re-renders every
+  // few seconds while polling). Keep the latest one in a ref so the effect
+  // below runs only once, when the dialog opens; re-running it would move the
+  // focus back to the first field while the user is typing elsewhere.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -22,7 +28,7 @@ export function Modal({ title, onClose, children, wide }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
       if (e.key === "Tab" && el) {
         const items = Array.from(
@@ -45,7 +51,7 @@ export function Modal({ title, onClose, children, wide }: Props) {
       document.removeEventListener("keydown", onKey);
       previous?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

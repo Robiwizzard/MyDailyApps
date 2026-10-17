@@ -97,6 +97,69 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface InstallOption {
+  type: "release" | "git";
+  requires?: string[];
+  setup?: string;
+  launch: string;
+  asset?: string;
+  tag?: string;
+}
+
+export interface CloudSpec {
+  root?: "" | "data" | "app";
+  include: string[];
+  exclude?: string[];
+  sqlite?: string[];
+  maxSizeMB?: number;
+}
+
+/** A library entry: the app's whole configuration. */
+export interface LibraryEntry {
+  id: string;
+  name?: string;
+  group?: string;
+  description?: string;
+  repo?: string;
+  port?: number;
+  path?: string;
+  install?: InstallOption[];
+  cloud?: CloudSpec | null;
+}
+
+export interface Finding {
+  field: string;
+  confidence: "detected" | "guessed" | "missing";
+  note: string;
+}
+
+export interface Draft {
+  app: LibraryEntry;
+  findings: Finding[];
+}
+
+export interface FileView {
+  key: string;
+  where: "data" | "app";
+  path: string;
+  size: number;
+  sqlite?: boolean;
+  keep: boolean;
+  reasons: string[];
+  synced: boolean;
+  aside?: boolean;
+  question?: boolean;
+  gone?: boolean;
+}
+
+export interface FilesInfo {
+  runs: number;
+  running: boolean;
+  recording: boolean;
+  root: "data" | "app";
+  files: FileView[];
+}
+
 const enc = encodeURIComponent;
 
 export const api = {
@@ -112,6 +175,17 @@ export const api = {
   update: (id: string, confirm: boolean, token?: string) =>
     request<{ app: AppView; log: string[] }>("POST", `/api/apps/${enc(id)}/update`, { confirm, token }),
   checkUpdates: () => request<AppsResponse>("POST", "/api/updates/check"),
+  detect: (repo: string, id?: string, token?: string) => request<Draft>("POST", "/api/detect", { repo, id, token }),
+  addApp: (e: LibraryEntry) => request<AppsResponse>("POST", "/api/apps", e),
+  getConfig: (id: string) => request<LibraryEntry>("GET", `/api/apps/${enc(id)}/config`),
+  saveConfig: (id: string, e: LibraryEntry) => request<AppsResponse>("PUT", `/api/apps/${enc(id)}/config`, e),
+  removeApp: (id: string) => request<AppsResponse>("DELETE", `/api/apps/${enc(id)}`),
+  files: (id: string) => request<FilesInfo>("GET", `/api/apps/${enc(id)}/files`),
+  record: (id: string, start: boolean) =>
+    request<{ changed: string[] | null; files: FilesInfo }>("POST", `/api/apps/${enc(id)}/files/record`, { start }),
+  aside: (id: string, key: string, action: "aside" | "restore" | "keep" | "temporary") =>
+    request<FilesInfo>("POST", `/api/apps/${enc(id)}/files/aside`, { key, action }),
+  applyFiles: (id: string, keys: string[]) => request<FilesInfo>("POST", `/api/apps/${enc(id)}/files/apply`, { keys }),
   sync: (id: string) => request<{ app: AppView }>("POST", `/api/apps/${enc(id)}/sync`),
   logs: (id: string) => request<{ lines: string[] }>("GET", `/api/apps/${enc(id)}/logs`),
   settings: () => request<Settings>("GET", "/api/settings"),

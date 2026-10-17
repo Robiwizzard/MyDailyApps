@@ -1,15 +1,21 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, AppView, ConfirmInfo, Settings, Status } from "./api";
+import { api, ApiError, AppView, ConfirmInfo, LibraryEntry, Settings, Status } from "./api";
 import { AppCard, Busy } from "./components/AppCard";
 import { LoadingScreen } from "./components/LoadingScreen";
 import { Modal } from "./components/Modal";
 import { ProfilePanel } from "./components/ProfilePanel";
+import { AppForm } from "./components/AppForm";
+import { FilesDialog } from "./components/FilesDialog";
 
 type Dialog =
   | { kind: "confirm"; app: AppView; info: ConfirmInfo }
   | { kind: "token"; app: AppView; message: string; action: "install" | "update" }
   | { kind: "error"; title: string; message: string; log?: string[] }
-  | { kind: "logs"; app: AppView; lines: string[] };
+  | { kind: "logs"; app: AppView; lines: string[] }
+  | { kind: "add" }
+  | { kind: "edit"; app: AppView; entry: LibraryEntry }
+  | { kind: "files"; app: AppView }
+  | { kind: "remove"; app: AppView };
 
 /** Opens a tab synchronously inside the click (popup blockers allow that). */
 function openPendingTab(name: string): Window | null {
@@ -196,6 +202,24 @@ export function App() {
     }
   };
 
+  const editApp = async (app: AppView) => {
+    try {
+      setDialog({ kind: "edit", app, entry: await api.getConfig(app.id) });
+    } catch (e) {
+      setAppError(app.id, (e as Error).message);
+    }
+  };
+
+  const removeApp = async (app: AppView) => {
+    setDialog(null);
+    try {
+      await api.removeApp(app.id);
+      await refreshApps();
+    } catch (e) {
+      setAppError(app.id, (e as Error).message);
+    }
+  };
+
   const showLogs = async (app: AppView) => {
     try {
       const r = await api.logs(app.id);
@@ -286,6 +310,9 @@ export function App() {
             </label>
             <input id="q" type="search" placeholder="Search by name" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
+          <button type="button" className="btn btn-outline add-app" onClick={() => setDialog({ kind: "add" })}>
+            Add app
+          </button>
           <div className="chips" role="group" aria-label="Filter by group">
             <button type="button" className={`chip${group === null ? " chip-on" : ""}`} aria-pressed={group === null} onClick={() => setGroup(null)}>
               All
@@ -324,6 +351,9 @@ export function App() {
                 onLogs={() => showLogs(a)}
                 onSync={() => syncNow(a)}
                 onUpdate={() => update(a, false)}
+                onEdit={() => editApp(a)}
+                onFiles={() => setDialog({ kind: "files", app: a })}
+                onRemove={() => setDialog({ kind: "remove", app: a })}
               />
             ))}
           </div>
@@ -376,6 +406,37 @@ export function App() {
           <div className="modal-actions">
             <button type="button" className="btn btn-primary" onClick={() => setDialog(null)}>
               OK
+            </button>
+          </div>
+        </Modal>
+      )}
+      {(dialog?.kind === "add" || dialog?.kind === "edit") && (
+        <AppForm
+          mode={dialog.kind}
+          initial={dialog.kind === "edit" ? dialog.entry : undefined}
+          groups={groups}
+          onClose={() => setDialog(null)}
+          onSaved={() => {
+            setDialog(null);
+            refreshApps().catch(() => {});
+          }}
+        />
+      )}
+      {dialog?.kind === "files" && (
+        <FilesDialog app={dialog.app} onClose={() => setDialog(null)} onChanged={() => refreshApps().catch(() => {})} />
+      )}
+      {dialog?.kind === "remove" && (
+        <Modal title={`Remove ${dialog.app.name}?`} onClose={() => setDialog(null)}>
+          <p>
+            The app is taken out of your library. Its folder (<code>{dialog.app.folder}</code>) and its data stay on this computer, and its files in
+            Google Drive stay too.
+          </p>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-quiet" onClick={() => setDialog(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => removeApp(dialog.app)}>
+              Remove
             </button>
           </div>
         </Modal>

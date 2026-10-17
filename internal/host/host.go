@@ -22,6 +22,7 @@ import (
 	"github.com/robiwizzard/mydailyapps/internal/drive"
 	"github.com/robiwizzard/mydailyapps/internal/install"
 	"github.com/robiwizzard/mydailyapps/internal/library"
+	"github.com/robiwizzard/mydailyapps/internal/observe"
 	"github.com/robiwizzard/mydailyapps/internal/procs"
 	"github.com/robiwizzard/mydailyapps/internal/shell"
 	"github.com/robiwizzard/mydailyapps/internal/state"
@@ -54,6 +55,9 @@ type Host struct {
 	updates         map[string]install.UpdateStatus
 	updating        map[string]bool
 	checkingUpdates bool
+	obsBefore       map[string]observe.Snapshot // taken at Start, compared at Stop
+	recording       map[string]observe.Snapshot // "record a save" in progress
+	obsMu           sync.Mutex                  // guards the observation files
 	installing      map[string]bool
 	installErr      map[string]string
 	steps           []Step
@@ -73,6 +77,7 @@ func New(cfg *config.Config, store *state.Store, sf *procs.StateFile) (*Host, er
 		Cfg: cfg, Store: store, Lib: library.NewCache(cfg.DataDir),
 		resolved: map[string]library.App{}, syncLocks: map[string]*sync.Mutex{}, syncing: map[string]bool{}, syncNote: map[string]string{},
 		updates: map[string]install.UpdateStatus{}, updating: map[string]bool{},
+		obsBefore: map[string]observe.Snapshot{}, recording: map[string]observe.Snapshot{},
 		scan: map[string]install.ScanResult{}, installing: map[string]bool{}, installErr: map[string]string{},
 		tokens: map[string]string{}, ShutdownCh: make(chan struct{}),
 		steps: []Step{
@@ -503,16 +508,22 @@ func (h *Host) Launch(ctx context.Context, id string, confirm bool) (string, err
 	}
 	dataDir := h.Cfg.AppDataDir(id)
 	_ = os.MkdirAll(dataDir, 0o700)
+	syncDir := h.syncRoot(id, dir, a.Cloud)
 	if st, _ := h.Procs.Status(id); st == "" {
 		// Steam-style: bring newer cloud files down before the app starts.
-		h.syncApp(ctx, id, dataDir, a.Cloud, pull)
+		h.syncApp(ctx, id, syncDir, a.Cloud, pull)
+		// Remember what the folders hold, to show what the app writes (Files view).
+		h.observeBefore(id, dir, dataDir)
 	}
 	cloud := a.Cloud
 	url, err := h.Procs.Start(ctx, procs.Spec{
 		ID: id, Dir: dir, Command: r.Launch, Port: a.Port, Path: a.Path,
 		Env: []string{"DATA_DIR=" + dataDir, "MYDAILYAPPS_MODE=" + string(h.Cfg.Mode), "MYDAILYAPPS_HOST=http://localhost:" + fmt.Sprint(h.Cfg.Port)},
 		// After the app exits, upload what changed.
-		OnExit: func() { h.syncAppAsync(id, dataDir, cloud, push) },
+		OnExit: func() {
+			h.observeAfter(id, dir, dataDir)
+			h.syncAppAsync(id, syncDir, cloud, push)
+		},
 	})
 	if err != nil {
 		return "", err
@@ -533,27 +544,6 @@ func (h *Host) Stop(id string, force bool) error {
 		return err
 	}
 	return h.Procs.Stop(id, force)
-}
-
-// ImportLibrary replaces the library (and saves it to Drive if connected).
-func (h *Host) ImportLibrary(ctx context.Context, b []byte) error {
-	l, err := library.Parse(b)
-	if err != nil {
-		return err
-	}
-	if err := h.Lib.Set(l, "imported file"); err != nil {
-		return err
-	}
-	h.Rescan()
-	if h.Drive.Connected() {
-		data, _ := l.Marshal()
-		ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		defer cancel()
-		if err := h.Drive.UploadFile(ctx, library.FileName, "application/json", data); err != nil {
-			return fmt.Errorf("saved locally, but saving to Drive failed: %w", err)
-		}
-	}
-	return nil
 }
 
 // RequestShutdown starts the shutdown path once.

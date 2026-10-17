@@ -44,8 +44,11 @@ type App struct {
 	Cloud       *Cloud          `json:"cloud,omitempty"`
 }
 
-// Cloud lists the files under the app's DATA_DIR that are synced to Drive.
+// Cloud lists the files that are synced to Drive. Patterns are relative to
+// the app's DATA_DIR, or to the app's own folder when Root is "app" (for apps
+// that keep their data next to their code instead of reading DATA_DIR).
 type Cloud struct {
+	Root      string   `json:"root,omitempty"` // "" or "data" = DATA_DIR, "app" = the app folder
 	Include   []string `json:"include"`
 	Exclude   []string `json:"exclude,omitempty"`
 	SQLite    []string `json:"sqlite,omitempty"`
@@ -117,6 +120,9 @@ func (c *Cloud) Validate() error {
 			}
 		}
 	}
+	if c.Root != "" && c.Root != "data" && c.Root != "app" {
+		return errors.New(`root must be "data" or "app"`)
+	}
 	if c.MaxSizeMB < 0 {
 		return errors.New("maxSizeMB must not be negative")
 	}
@@ -164,6 +170,9 @@ func Merge(entry App, manifest *App) App {
 	}
 	return out
 }
+
+// AppRoot reports whether the patterns are relative to the app folder.
+func (c *Cloud) AppRoot() bool { return c != nil && c.Root == "app" }
 
 // ManifestName is the file an app ships in its repository root.
 const ManifestName = "mydailyapps.json"

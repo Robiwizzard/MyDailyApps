@@ -403,8 +403,13 @@ func Matches(spec *library.Cloud, rel string) bool {
 		return false
 	}
 	base := path.Base(rel)
-	if strings.HasPrefix(base, ".download-") {
+	if strings.HasPrefix(base, ".download-") || base == ".mydailyapps-installed.json" {
 		return false
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == ".git" || seg == "node_modules" {
+			return false // never sync code or dependencies, even with root "app"
+		}
 	}
 	for _, ext := range []string{"-wal", "-shm", "-journal"} {
 		if strings.HasSuffix(rel, ext) {

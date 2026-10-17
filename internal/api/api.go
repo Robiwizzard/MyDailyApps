@@ -16,6 +16,7 @@ import (
 
 	"github.com/robiwizzard/mydailyapps/internal/host"
 	"github.com/robiwizzard/mydailyapps/internal/install"
+	"github.com/robiwizzard/mydailyapps/internal/library"
 )
 
 // CSRFHeader must be sent with every state-changing request. Other websites
@@ -39,6 +40,15 @@ func Handler(h *host.Host, ui fs.FS, port int) http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/sync", s.sync)
 	mux.HandleFunc("POST /api/apps/{id}/update", s.update)
 	mux.HandleFunc("POST /api/updates/check", s.checkUpdates)
+	mux.HandleFunc("POST /api/detect", s.detect)
+	mux.HandleFunc("POST /api/apps", s.addEntry)
+	mux.HandleFunc("GET /api/apps/{id}/config", s.getEntry)
+	mux.HandleFunc("PUT /api/apps/{id}/config", s.putEntry)
+	mux.HandleFunc("DELETE /api/apps/{id}", s.removeEntry)
+	mux.HandleFunc("GET /api/apps/{id}/files", s.files)
+	mux.HandleFunc("POST /api/apps/{id}/files/record", s.record)
+	mux.HandleFunc("POST /api/apps/{id}/files/aside", s.aside)
+	mux.HandleFunc("POST /api/apps/{id}/files/apply", s.applyFiles)
 	mux.HandleFunc("GET /api/library", s.getLibrary)
 	mux.HandleFunc("PUT /api/library", s.putLibrary)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -206,6 +216,129 @@ func (s *server) update(w http.ResponseWriter, r *http.Request) {
 	}
 	a, _ := s.findApp(id)
 	writeJSON(w, 200, map[string]any{"app": a, "log": lines})
+}
+
+func (s *server) detect(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Repo  string `json:"repo"`
+		ID    string `json:"id"`
+		Token string `json:"token"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	d, err := s.h.Detect(r.Context(), body.Repo, body.ID, body.Token)
+	if s.handleCommonErr(w, err, nil) {
+		return
+	}
+	writeJSON(w, 200, d)
+}
+
+func (s *server) addEntry(w http.ResponseWriter, r *http.Request) {
+	var e library.App
+	if err := readJSON(r, &e); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.h.SaveEntry(r.Context(), "", e); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.apps(w, r)
+}
+
+func (s *server) getEntry(w http.ResponseWriter, r *http.Request) {
+	e, err := s.h.Entry(r.PathValue("id"))
+	if s.handleCommonErr(w, err, nil) {
+		return
+	}
+	writeJSON(w, 200, e)
+}
+
+func (s *server) putEntry(w http.ResponseWriter, r *http.Request) {
+	var e library.App
+	if err := readJSON(r, &e); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.h.SaveEntry(r.Context(), r.PathValue("id"), e); err != nil {
+		if errors.Is(err, host.ErrNotFound) {
+			writeErr(w, 404, err)
+		} else {
+			writeErr(w, 400, err)
+		}
+		return
+	}
+	s.apps(w, r)
+}
+
+func (s *server) removeEntry(w http.ResponseWriter, r *http.Request) {
+	if err := s.h.RemoveEntry(r.Context(), r.PathValue("id")); err != nil {
+		if errors.Is(err, host.ErrNotFound) {
+			writeErr(w, 404, err)
+		} else {
+			writeErr(w, 409, err)
+		}
+		return
+	}
+	s.apps(w, r)
+}
+
+func (s *server) files(w http.ResponseWriter, r *http.Request) {
+	info, err := s.h.Files(r.PathValue("id"))
+	if s.handleCommonErr(w, err, nil) {
+		return
+	}
+	writeJSON(w, 200, info)
+}
+
+func (s *server) record(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Start bool `json:"start"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	keys, err := s.h.Record(r.PathValue("id"), body.Start)
+	if err != nil {
+		writeErr(w, 409, err)
+		return
+	}
+	info, _ := s.h.Files(r.PathValue("id"))
+	writeJSON(w, 200, map[string]any{"changed": keys, "files": info})
+}
+
+func (s *server) aside(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key    string `json:"key"`
+		Action string `json:"action"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.h.Aside(r.PathValue("id"), body.Key, body.Action); err != nil {
+		writeErr(w, 409, err)
+		return
+	}
+	s.files(w, r)
+}
+
+func (s *server) applyFiles(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Keys []string `json:"keys"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if _, err := s.h.ApplyFiles(r.Context(), r.PathValue("id"), body.Keys); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.files(w, r)
 }
 
 func (s *server) checkUpdates(w http.ResponseWriter, r *http.Request) {

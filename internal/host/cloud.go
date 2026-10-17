@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/robiwizzard/mydailyapps/internal/cloudsync"
+	"github.com/robiwizzard/mydailyapps/internal/install"
 	"github.com/robiwizzard/mydailyapps/internal/library"
 	"github.com/robiwizzard/mydailyapps/internal/state"
 )
@@ -99,9 +100,19 @@ func (h *Host) SyncNow(ctx context.Context, id string) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	h.syncApp(ctx, id, dataDir, a.Cloud, pull)
-	h.syncApp(ctx, id, dataDir, a.Cloud, push)
+	s, _ := h.Store.App(id)
+	dir := h.syncRoot(id, install.Folder(h.Cfg.AppsDir, s.InstallPath, id), a.Cloud)
+	h.syncApp(ctx, id, dir, a.Cloud, pull)
+	h.syncApp(ctx, id, dir, a.Cloud, push)
 	return nil
+}
+
+// syncRoot is the folder the cloud patterns are relative to.
+func (h *Host) syncRoot(id, appDir string, spec *library.Cloud) string {
+	if spec.AppRoot() {
+		return appDir
+	}
+	return h.Cfg.AppDataDir(id)
 }
 
 // WaitSyncs waits for uploads started after apps exited, up to timeout.

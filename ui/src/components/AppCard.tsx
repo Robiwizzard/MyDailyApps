@@ -14,6 +14,9 @@ interface Props {
   onLogs: () => void;
   onSync: () => void;
   onUpdate: () => void;
+  onEdit: () => void;
+  onFiles: () => void;
+  onRemove: () => void;
 }
 
 const statusText: Record<string, string> = {
@@ -27,7 +30,7 @@ const statusText: Record<string, string> = {
   updating: "Updating…",
 };
 
-export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate }: Props) {
+export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate, onEdit, onFiles, onRemove }: Props) {
   const [more, setMore] = useState(false);
   const status =
     busy ??
@@ -89,7 +92,7 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
           )}
           <div className="card-group">{app.group || "No group"}</div>
         </div>
-        {app.status !== "not_installed" && (
+        {(
           <button
             type="button"
             className="icon-btn card-more"
@@ -106,15 +109,25 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
         )}
       </div>
       {app.description && <p className="card-desc">{app.description}</p>}
-      {more && app.status !== "not_installed" && (
+      {more && (
         <div className="card-extra">
           {app.status === "running" && app.url && (
             <a className="btn btn-ghost" href={app.url} target="_blank" rel="noopener noreferrer">
               Open
             </a>
           )}
-          <button type="button" className="btn btn-ghost" onClick={onLogs}>
-            Logs
+          {app.status !== "not_installed" && (
+            <>
+              <button type="button" className="btn btn-ghost" onClick={onFiles}>
+                Files
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={onLogs}>
+                Logs
+              </button>
+            </>
+          )}
+          <button type="button" className="btn btn-ghost" onClick={onEdit}>
+            Edit
           </button>
           {app.cloud && app.status === "stopped" && (
             <button type="button" className="btn btn-ghost" onClick={onSync} disabled={!!app.syncing}>
@@ -124,6 +137,11 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
           {running && (
             <button type="button" className="btn btn-ghost btn-danger" onClick={onForceStop}>
               Force stop
+            </button>
+          )}
+          {!running && (
+            <button type="button" className="btn btn-ghost btn-danger" onClick={onRemove}>
+              Remove
             </button>
           )}
         </div>

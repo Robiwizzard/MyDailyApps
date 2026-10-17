@@ -87,21 +87,45 @@ Before an app runs for the first time, the host shows the exact install and star
 
 Private repositories: if a clone or release download needs authentication, the host asks for a GitHub token. It is kept in memory for the session only and never saved.
 
-## App manifests (`mydailyapps.json`)
+## Adding and editing apps
 
-An app can describe itself in a `mydailyapps.json` file in its repository root: name, group, description, install options, port, and which files to keep in the cloud. The library entry can then be just:
+Each app's whole configuration is its **library entry**: name, group, install options, port and cloud files. The library syncs through Drive, so it works on any computer, before the app is installed. Nothing has to be added to the app's own repository.
 
-```json
-{ "id": "cookbook", "repo": "https://github.com/OWNER/cookbook" }
-```
+**Add app** (next to the group filters):
 
-- Any field set in the library entry overrides the manifest.
-- An installed app's manifest is read from its folder. Before installing, the host fetches it from the GitHub repository (default branch) and caches it in the data folder.
-- A manifest has the same fields as a library entry, plus `"manifestVersion": 1` and an optional `cloud` section (below).
+1. Paste the repository link and click **Detect**.
+2. The host reads the repository through the GitHub API. It doesn't clone it and runs nothing.
+3. It drafts the entry with fixed rules, no AI. Each field is marked *Detected*, *Guessed* or *Missing*, with the reason.
+4. Review, change anything, and save.
+
+What the rules look at:
+
+| From | Fills in |
+|---|---|
+| Repository name, description, topics | name, description, a group (an existing one if the topics match) |
+| Newest release assets with OS and architecture in their names | a `release` install option and its start command |
+| `package.json` (+ lockfile), `go.mod`, `Cargo.toml`, `pyproject.toml` / `requirements.txt` | a `git` option: required tools, setup and start commands, Node version note |
+| The main source files | whether the app reads `PORT` (else the port it always uses) and `DATA_DIR` |
+| `.gitignore` entries like `data/`, `saves/`, `*.db` | cloud patterns in the app's own folder, for apps that don't read `DATA_DIR` |
+
+Without a GitHub token, GitHub allows 60 requests an hour; one detection uses up to about 17. A `mydailyapps.json` in the repository is still read as a hint when present.
+
+**Edit** (card `⋯` menu) changes an entry later. **Detect again** reads the installed folder instead of GitHub. **Remove** takes an app out of the library; its folder, data and Drive files stay.
+
+## Files: choosing what to sync without reading the code
+
+The card's `⋯` → **Files** shows what the app writes. The host snapshots the app's data folder and the files git doesn't track in its own folder, before each start and after each stop. Each file gets a *Keep* or *Temporary* suggestion with reasons:
+
+- **Names and places:** `cache`, `logs`, `*.log`, `*.tmp`, database side files lean temporary. `saves`, `data`, `db`, SQLite files (found by their first bytes) lean keep.
+- **Behaviour across runs:** a file that changes on every run whatever you do leans temporary. One that comes back with identical content after being removed was regenerated.
+- **Record a save:** while the app runs, click **Record a save**, save something in the app, and click **Done saving**. Whatever changed in that window is marked keep.
+- **Test without it:** with the app stopped, the file is moved aside. Run the app, then answer whether your data was still there. The answer decides, and the file is put back if it was needed.
+
+**Use ticked files for cloud sync** writes the choice into the app's library entry as patterns. If every file seen in a folder is ticked, the whole folder is synced (`saves/**`).
 
 ## Cloud saves
 
-Like Steam Cloud, the host keeps an app's data in Google Drive without the app talking to Google. The app's manifest (or library entry) lists which files under its `DATA_DIR` to sync:
+Like Steam Cloud, the host keeps an app's data in Google Drive without the app talking to Google. The app's library entry lists which files to sync. They are under its `DATA_DIR`, or under its own folder with `"root": "app"` for apps that keep data next to their code:
 
 ```json
 "cloud": {
@@ -118,7 +142,7 @@ How it works:
 - **After the app exits**, files that changed are uploaded. SQLite databases listed under `sqlite` have their write-ahead log merged first, and are never copied while the app runs.
 - **Sync now** (under the card's `⋯` button) does both while the app is stopped. The card shows the result of the last sync.
 - **Conflicts**: if a file changed both on this computer and in Drive since the last sync, the newer copy wins. The other copy is saved to `MyDailyApps/backups/<id>/` in Drive with the date and where it came from.
-- **What isn't synced**: deleting a file is not synced yet, so a file deleted on one computer comes back from the cloud. Patterns can't leave `DATA_DIR`. SQLite `-wal`/`-shm` files are never synced.
+- **What isn't synced**: deleting a file is not synced yet, so a file deleted on one computer comes back from the cloud. Patterns can't leave their root folder. SQLite `-wal`/`-shm` files, `.git` and `node_modules` are never synced.
 - **Size limit**: if the matched files are larger than `maxSizeMB`, nothing is uploaded and the card says why.
 - **Errors**: if Drive can't be reached, the app starts with the local copy and the card shows the problem.
 
@@ -150,7 +174,7 @@ When a newer version exists, the card shows "Update available" and an **Update**
 
 Update works only while the app is stopped. It shows the exact steps and asks first:
 
-- **git:** `git pull --ff-only`, then the app's setup command (taken from the updated manifest). If you edited files in the app folder, the update stops instead of overwriting them.
+- **git:** `git pull --ff-only`, then the app's setup command from its library entry. If you edited files in the app folder, the update stops instead of overwriting them.
 - **release:** the new package is unpacked next to the app and set up, then swapped in. If anything fails, the old version stays.
 
 **Check for updates** in the profile panel runs the check again. App data in `DATA_DIR` is never touched by an update.
@@ -169,7 +193,7 @@ The app contract is small: read `PORT` and `DATA_DIR` from the environment, list
 `kit/` is a separate Go module with helpers:
 
 - `kit.Load(appID, defaultPort)`: `PORT`, `DATA_DIR`, and the same guest/persistent pattern as the host when started by hand.
-- `kit.Storage` with `LocalStorage` and `DriveStorage` (keeps data in `Apps/<app-id>/` in Drive). Most apps don't need this: listing files in the manifest's `cloud` section lets the host sync them.
+- `kit.Storage` with `LocalStorage` and `DriveStorage` (keeps data in `Apps/<app-id>/` in Drive). Most apps don't need this: choosing files with **Files** (or in the app's cloud settings) lets the host sync them.
 - `kit.Snapshots`: timestamped copies, keep the last N, and `RestoreIfNewer` for a startup check.
 - `kit.LoopbackLogin` and `kit.FileTokenSource` for the app's own Google sign-in.
 
@@ -187,8 +211,10 @@ internal/config/     env + mydailyapps.env, guest/persistent folders
 internal/state/      local SQLite: app paths, last launched, approvals, settings, Drive token
 internal/library/    library file model, validation, local cache
 internal/drive/      Google OAuth (loopback redirect, PKCE) and Drive file calls, app folders and backups
-internal/install/    folder scan, requirement checks, git clone, release download/unpack, manifest fetch
+internal/install/    folder scan, requirement checks, git clone, release download/unpack, updates
 internal/cloudsync/  Steam-style file sync of app data (pull before start, push after exit)
+internal/detect/     drafts a library entry from a repository with fixed rules
+internal/observe/    snapshots of what an app writes, keep/temporary suggestions
 internal/procs/      launch, ready check, stop, tree kill, state file (procs_windows.go, procs_unix.go)
 internal/host/       ties it together (used by the HTTP layer)
 internal/api/        HTTP handlers and the embedded UI

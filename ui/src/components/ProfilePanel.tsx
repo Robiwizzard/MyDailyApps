@@ -42,14 +42,20 @@ export function ProfilePanel({ settings, onSettings, onClose, onShutdown, onLibr
   const [info, setInfo] = useState<string | null>(null);
   const [confirmShutdown, setConfirmShutdown] = useState(false);
 
+  // Focus the panel once when it opens (not on every re-render of the page).
   useEffect(() => {
     panelRef.current?.querySelector<HTMLElement>("button")?.focus();
+  }, []);
+
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !confirmShutdown) onClose();
+      if (e.key === "Escape" && !confirmShutdown) closeRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, confirmShutdown]);
+  }, [confirmShutdown]);
 
   const run = async (fn: () => Promise<void>) => {
     setError(null);
