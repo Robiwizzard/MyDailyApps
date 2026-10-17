@@ -1,0 +1,65 @@
+# On a version tag (v1.2.3): build the web UI once, cross-compile the host for
+# Windows, macOS and Linux, and attach the files to a GitHub release.
+#
+# Optional repository secrets GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET embed the
+# Google sign-in client so users do not have to configure one.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm install
+          npm run build
+
+      - name: Test
+        run: go test ./... && (cd kit && go test ./...)
+
+      - name: Cross-compile
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          set -eu
+          LDFLAGS="-s -w -X main.Version=$VERSION"
+          if [ -n "$GOOGLE_CLIENT_ID" ]; then
+            LDFLAGS="$LDFLAGS -X github.com/robiwizzard/mydailyapps/internal/config.DefaultGoogleClientID=$GOOGLE_CLIENT_ID"
+            LDFLAGS="$LDFLAGS -X github.com/robiwizzard/mydailyapps/internal/config.DefaultGoogleClientSecret=$GOOGLE_CLIENT_SECRET"
+          fi
+          mkdir -p dist
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            name="mydailyapps_${VERSION}_${os}_${arch}"
+            bin=mydailyapps; [ "$os" = windows ] && bin=mydailyapps.exe
+            mkdir -p "build/$name"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" -o "build/$name/$bin" ./cmd/mydailyapps
+            cp mydailyapps.env.example library.example.json "build/$name/"
+            (cd build && zip -qr "../dist/$name.zip" "$name")
+          done
+          (cd dist && sha256sum *.zip > checksums.txt)
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

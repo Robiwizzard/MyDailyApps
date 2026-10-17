@@ -1,0 +1,11 @@
+/mydailyapps
+/mydailyapps.exe
+/dist/
+/apps/
+/mydailyapps.env
+node_modules/
+ui/dist/*
+!ui/dist/.keep
+/library.json
+/ai-help
+/examples

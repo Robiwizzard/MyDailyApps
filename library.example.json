@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "initiative-tracker",
+      "name": "Initiative Tracker",
+      "group": "D&D",
+      "description": "Turn order for combat.",
+      "repo": "https://github.com/OWNER/initiative-tracker",
+      "install": [
+        { "type": "release", "launch": "tracker" },
+        { "type": "git", "requires": ["node"], "setup": "npm install", "launch": "npm start" }
+      ]
+    },
+    {
+      "id": "cookbook",
+      "name": "Cookbook",
+      "group": "Cooking",
+      "repo": "https://github.com/OWNER/cookbook",
+      "install": [
+        { "type": "release", "launch": "cookbook" },
+        { "type": "git", "requires": ["go"], "setup": "go build -o .", "launch": "cookbook" }
+      ]
+    },
+    {
+      "id": "hello-app",
+      "name": "Hello App",
+      "group": "Tools",
+      "description": "Sample app.",
+      "repo": "https://github.com/OWNER/hello-app",
+      "install": [
+        { "type": "release", "launch": "hello-app" },
+        { "type": "git", "requires": ["go"], "setup": "go build -o .", "launch": "hello-app" }
+      ]
+    }
+  ]
+}
