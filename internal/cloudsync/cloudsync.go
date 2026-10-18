@@ -7,8 +7,13 @@
 // are resolved without asking: the newer copy wins and the other copy is
 // saved to the app's backup folder in Drive.
 //
-// Deleting a file is not synced yet: a file deleted on one computer comes
-// back from the cloud on the next pull.
+// Deletions are synced too. A file that was synced before and is now gone on
+// one side is deleted on the other side, unless that side changed it since
+// the last sync (then the changed copy wins and is synced again). Cloud
+// copies are moved to the Drive trash, never deleted for good. As a safety
+// net, when every synced file is gone from one side at once (an emptied
+// data folder, a Drive folder deleted on another computer) nothing is
+// deleted on the other side: the files are copied back instead.
 package cloudsync
 
 import (
@@ -49,6 +54,8 @@ type Remote interface {
 	BackupLocal(ctx context.Context, appID, name string, r io.Reader) error
 	// BackupRemote copies a cloud file into the app's backup folder.
 	BackupRemote(ctx context.Context, appID, fileID, name string) error
+	// Delete removes a synced file from the cloud (Drive: moves it to the trash).
+	Delete(ctx context.Context, appID, fileID string) error
 }
 
 // Record is the version of a file at its last successful sync.
@@ -62,12 +69,14 @@ type Record struct {
 type Records interface {
 	SyncRecords(appID string) (map[string]Record, error)
 	PutSyncRecord(appID string, r Record) error
+	DeleteSyncRecord(appID, path string) error
 }
 
 // Report describes what one sync did.
 type Report struct {
 	Downloaded []string
 	Uploaded   []string
+	Deleted    []string // "path: deleted in the cloud, removed here" etc.
 	Conflicts  []string // "path: kept this computer's copy" etc.
 	Skipped    string   // why nothing was uploaded, if so
 }
@@ -79,6 +88,9 @@ func (r Report) String() string {
 	}
 	if n := len(r.Uploaded); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d uploaded", n))
+	}
+	if n := len(r.Deleted); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", n))
 	}
 	if n := len(r.Conflicts); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d conflict(s) resolved, older copy backed up", n))
@@ -129,10 +141,17 @@ func (s *Syncer) Pull(ctx context.Context, appID, dataDir string, spec *library.
 	if err != nil {
 		return rep, err
 	}
+	// Safety net: with no synced file left here at all, nothing here counts
+	// as deleted (the files are downloaded again).
+	localGone := !dirExists(dataDir) || !anyLocal(dataDir, recs, spec)
+	inCloud := map[string]bool{}
+	cloudHasAny := false
 	for _, r := range remote {
 		if !Matches(spec, r.Path) {
 			continue
 		}
+		inCloud[r.Path] = true
+		cloudHasAny = true
 		local, err := hashLocal(dataDir, r.Path)
 		if err != nil {
 			return rep, err
@@ -141,7 +160,15 @@ func (s *Syncer) Pull(ctx context.Context, appID, dataDir string, spec *library.
 		switch {
 		case local != nil && local.sha == r.SHA256:
 			// Same content on both sides.
+		case local == nil && hasRec && rec.SHA256 == r.SHA256 && !localGone:
+			// Deleted on this computer and unchanged in the cloud.
+			if err := s.deleteRemote(ctx, appID, r, &rep); err != nil {
+				return rep, err
+			}
+			continue
 		case local == nil:
+			// New in the cloud, or changed there after this computer deleted
+			// it (the change wins).
 			if err := s.download(ctx, dataDir, r, spec); err != nil {
 				return rep, err
 			}
@@ -182,7 +209,42 @@ func (s *Syncer) Pull(ctx context.Context, appID, dataDir string, spec *library.
 			return rep, err
 		}
 	}
+	// Files synced before that are no longer in the cloud.
+	for p, rec := range recs {
+		if inCloud[p] || !Matches(spec, p) {
+			continue
+		}
+		local, err := hashLocal(dataDir, p)
+		if err != nil {
+			return rep, err
+		}
+		switch {
+		case local == nil:
+			// Gone on both sides.
+		case !cloudHasAny:
+			// The whole cloud folder is empty: upload again instead of deleting here.
+		case local.sha == rec.SHA256:
+			if err := removeLocal(dataDir, p, spec); err != nil {
+				return rep, fmt.Errorf("deleting %s: %w", p, err)
+			}
+			rep.Deleted = append(rep.Deleted, p+": deleted in the cloud, so removed here")
+		default:
+			rep.Conflicts = append(rep.Conflicts, p+": deleted in the cloud but changed here; this computer's copy is kept and uploaded again")
+		}
+		if err := s.Records.DeleteSyncRecord(appID, p); err != nil {
+			return rep, err
+		}
+	}
 	return rep, nil
+}
+
+// deleteRemote moves a cloud file that was deleted here to the trash.
+func (s *Syncer) deleteRemote(ctx context.Context, appID string, r RemoteFile, rep *Report) error {
+	if err := s.Remote.Delete(ctx, appID, r.ID); err != nil {
+		return fmt.Errorf("deleting the cloud copy of %s: %w", r.Path, err)
+	}
+	rep.Deleted = append(rep.Deleted, r.Path+": deleted on this computer, so the cloud copy was moved to the Drive trash")
+	return s.Records.DeleteSyncRecord(appID, r.Path)
 }
 
 // Push uploads files that changed on this computer. Run it after the app exited.
@@ -273,7 +335,79 @@ func (s *Syncer) Push(ctx context.Context, appID, dataDir string, spec *library.
 		}
 		rep.Uploaded = append(rep.Uploaded, l.path)
 	}
+	// Files synced before that are no longer on this computer.
+	if len(locals) == 0 {
+		// Safety net: an emptied or missing folder deletes nothing in the
+		// cloud; the next pull downloads the files again.
+		return rep, nil
+	}
+	here := map[string]bool{}
+	for _, l := range locals {
+		here[l.path] = true
+	}
+	for p, rec := range recs {
+		if here[p] || !Matches(spec, p) {
+			continue
+		}
+		r, inCloud := remote[p]
+		switch {
+		case !inCloud:
+			// Gone on both sides.
+		case r.SHA256 == rec.SHA256:
+			if err := s.deleteRemote(ctx, appID, r, &rep); err != nil {
+				return rep, err
+			}
+			continue
+		default:
+			rep.Conflicts = append(rep.Conflicts, p+": deleted on this computer but changed in the cloud; the cloud copy is kept and downloaded on the next sync")
+		}
+		if err := s.Records.DeleteSyncRecord(appID, p); err != nil {
+			return rep, err
+		}
+	}
 	return rep, nil
+}
+
+// removeLocal deletes a synced file (and a database's side files), then any
+// folders it leaves empty.
+func removeLocal(dataDir, rel string, spec *library.Cloud) error {
+	abs := filepath.Join(dataDir, filepath.FromSlash(rel))
+	if err := os.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if isSQLite(spec, rel) {
+		for _, ext := range []string{"-wal", "-shm", "-journal"} {
+			_ = os.Remove(abs + ext)
+		}
+	}
+	root := filepath.Clean(dataDir)
+	for d := filepath.Dir(abs); d != root && strings.HasPrefix(d, root); d = filepath.Dir(d) {
+		if os.Remove(d) != nil { // fails when not empty
+			break
+		}
+	}
+	return nil
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
+// anyLocal reports whether at least one previously synced file still exists here.
+func anyLocal(dataDir string, recs map[string]Record, spec *library.Cloud) bool {
+	if len(recs) == 0 {
+		return true // nothing synced yet, so nothing can count as deleted anyway
+	}
+	for p := range recs {
+		if !Matches(spec, p) {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(dataDir, filepath.FromSlash(p))); err == nil && !st.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Syncer) backupLocal(ctx context.Context, appID string, l *localFile) error {

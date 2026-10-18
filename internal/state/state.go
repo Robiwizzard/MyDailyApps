@@ -200,6 +200,23 @@ func (s *Store) PutSyncRecord(appID string, r SyncRecord) error {
 	return err
 }
 
+// DeleteSyncRecord forgets one file's synced version (the file was deleted).
+func (s *Store) DeleteSyncRecord(appID, path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM sync_records WHERE app_id = ? AND path = ?`, appID, path)
+	return err
+}
+
+// ClearSyncRecords forgets all of an app's synced versions, so the next sync
+// compares both sides from scratch (used when the synced folder changes).
+func (s *Store) ClearSyncRecords(appID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM sync_records WHERE app_id = ?`, appID)
+	return err
+}
+
 // CheckpointSQLite merges a database's write-ahead log into the main file so
 // it can be copied as one file. Only call it while no app has it open.
 func CheckpointSQLite(path string) error {
@@ -217,4 +234,16 @@ func CheckpointSQLite(path string) error {
 		return errors.New("the database is still in use")
 	}
 	return nil
+}
+
+// ForgetApp deletes everything this computer remembers about an app: its
+// install path, last launch, approvals and sync records.
+func (s *Store) ForgetApp(appID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`DELETE FROM app_state WHERE id = ?`, appID); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM sync_records WHERE app_id = ?`, appID)
+	return err
 }

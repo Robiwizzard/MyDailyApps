@@ -17,6 +17,7 @@ interface Props {
   onEdit: () => void;
   onFiles: () => void;
   onRemove: () => void;
+  onDelete: () => void;
 }
 
 const statusText: Record<string, string> = {
@@ -30,7 +31,7 @@ const statusText: Record<string, string> = {
   updating: "Updating…",
 };
 
-export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate, onEdit, onFiles, onRemove }: Props) {
+export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate, onEdit, onFiles, onRemove, onDelete }: Props) {
   const [more, setMore] = useState(false);
   const status =
     busy ??
@@ -140,9 +141,14 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
             </button>
           )}
           {!running && (
-            <button type="button" className="btn btn-ghost btn-danger" onClick={onRemove}>
-              Remove
-            </button>
+            <>
+              <button type="button" className="btn btn-ghost" onClick={onRemove}>
+                Remove
+              </button>
+              <button type="button" className="btn btn-ghost btn-danger" onClick={onDelete}>
+                Delete everything
+              </button>
+            </>
           )}
         </div>
       )}

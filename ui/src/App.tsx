@@ -15,7 +15,9 @@ type Dialog =
   | { kind: "add" }
   | { kind: "edit"; app: AppView; entry: LibraryEntry }
   | { kind: "files"; app: AppView }
-  | { kind: "remove"; app: AppView };
+  | { kind: "remove"; app: AppView }
+  | { kind: "delete"; app: AppView }
+  | { kind: "deleted"; app: AppView; report: string[] };
 
 /** Opens a tab synchronously inside the click (popup blockers allow that). */
 function openPendingTab(name: string): Window | null {
@@ -354,6 +356,7 @@ export function App() {
                 onEdit={() => editApp(a)}
                 onFiles={() => setDialog({ kind: "files", app: a })}
                 onRemove={() => setDialog({ kind: "remove", app: a })}
+                onDelete={() => setDialog({ kind: "delete", app: a })}
               />
             ))}
           </div>
@@ -428,8 +431,12 @@ export function App() {
       {dialog?.kind === "remove" && (
         <Modal title={`Remove ${dialog.app.name}?`} onClose={() => setDialog(null)}>
           <p>
-            The app is taken out of your library. Its folder (<code>{dialog.app.folder}</code>) and its data stay on this computer, and its files in
-            Google Drive stay too.
+            The card is taken out of your library. Nothing else is deleted: the app's folder (<code>{dialog.app.folder}</code>), its data and its
+            files in Google Drive all stay.
+          </p>
+          <p className="muted small">
+            If you add the same app again later, MyDailyApps finds its earlier settings and Drive files, and your data comes back. To delete everything
+            instead, use <strong>Delete everything</strong>.
           </p>
           <div className="modal-actions">
             <button type="button" className="btn btn-quiet" onClick={() => setDialog(null)}>
@@ -437,6 +444,30 @@ export function App() {
             </button>
             <button type="button" className="btn btn-primary" onClick={() => removeApp(dialog.app)}>
               Remove
+            </button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "delete" && (
+        <DeleteDialog
+          app={dialog.app}
+          onCancel={() => setDialog(null)}
+          onDone={(report) => {
+            setDialog({ kind: "deleted", app: dialog.app, report });
+            refreshApps().catch(() => {});
+          }}
+        />
+      )}
+      {dialog?.kind === "deleted" && (
+        <Modal title={`${dialog.app.name} was deleted`} onClose={() => setDialog(null)}>
+          <ul className="report">
+            {dialog.report.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-primary" onClick={() => setDialog(null)}>
+              OK
             </button>
           </div>
         </Modal>
@@ -492,6 +523,62 @@ function ConfirmDialog({ info, app, onCancel, onConfirm }: { info: ConfirmInfo; 
           {isInstall ? "Install" : isUpdate ? "Update" : "Run"}
         </button>
       </div>
+    </Modal>
+  );
+}
+
+function DeleteDialog({ app, onCancel, onDone }: { app: AppView; onCancel: () => void; onDone: (report: string[]) => void }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (typed.trim() !== app.id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.deleteEverything(app.id);
+      onDone(r.report);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Delete ${app.name} everywhere?`} onClose={onCancel}>
+      <form onSubmit={submit} className="form">
+        <p>This deletes, and cannot be undone on this computer:</p>
+        <ul className="report">
+          <li>
+            the app's folder <code>{app.folder}</code>
+          </li>
+          <li>its data folder and everything MyDailyApps remembers about it here</li>
+          <li>its card in your library</li>
+          <li>
+            its files in Google Drive (<code>MyDailyApps/apps/{app.id}</code> and its backups). They go to the Drive trash, where Google keeps them for 30
+            days.
+          </li>
+        </ul>
+        <label className="field">
+          <span>
+            Type <code>{app.id}</code> to confirm
+          </span>
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
+        </label>
+        {error && (
+          <p className="error-text" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-quiet" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn-primary btn-delete" disabled={busy || typed.trim() !== app.id}>
+            {busy ? "Deleting…" : "Delete everything"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

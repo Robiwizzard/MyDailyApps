@@ -17,6 +17,7 @@ import (
 type fakeRemote struct {
 	files   map[string]*fakeFile // by id
 	backups map[string]string    // name -> content
+	trash   []string             // paths of deleted files
 	n       int
 }
 
@@ -65,6 +66,15 @@ func (f *fakeRemote) BackupRemote(ctx context.Context, appID, id, name string) e
 	return nil
 }
 
+func (f *fakeRemote) Delete(ctx context.Context, appID, id string) error {
+	if f.files[id] == nil {
+		return fmt.Errorf("no file %s", id)
+	}
+	f.trash = append(f.trash, f.files[id].Path)
+	delete(f.files, id)
+	return nil
+}
+
 type memRecords map[string]Record
 
 func (m memRecords) SyncRecords(string) (map[string]Record, error) {
@@ -75,6 +85,7 @@ func (m memRecords) SyncRecords(string) (map[string]Record, error) {
 	return out, nil
 }
 func (m memRecords) PutSyncRecord(_ string, r Record) error { m[r.Path] = r; return nil }
+func (m memRecords) DeleteSyncRecord(_, p string) error       { delete(m, p); return nil }
 
 type computer struct {
 	dir string
@@ -226,4 +237,124 @@ func hasBackup(f *fakeRemote, origin, content string) bool {
 		}
 	}
 	return false
+}
+
+func TestDeleteSyncsBothWays(t *testing.T) {
+	ctx := context.Background()
+	cloud := newFakeRemote()
+	a, b := newComputer(t, cloud), newComputer(t, cloud)
+	t0 := time.Now().Add(-time.Hour)
+	a.write(t, "app.db", "db", t0)
+	a.write(t, "images/cat.png", "cat", t0)
+	a.write(t, "images/old/dog.png", "dog", t0)
+	a.s.Push(ctx, "x", a.dir, spec)
+	b.s.Pull(ctx, "x", b.dir, spec)
+
+	// A deletes a file while its app runs; the push after exit trashes the cloud copy.
+	os.Remove(filepath.Join(a.dir, "images", "old", "dog.png"))
+	rep, err := a.s.Push(ctx, "x", a.dir, spec)
+	if err != nil || len(rep.Deleted) != 1 || len(cloud.trash) != 1 {
+		t.Fatalf("push A: %+v %v %v", rep, err, cloud.trash)
+	}
+	// B's next pull removes its copy (and the empty folder) instead of uploading it back.
+	rep, err = b.s.Pull(ctx, "x", b.dir, spec)
+	if err != nil || len(rep.Deleted) != 1 {
+		t.Fatalf("pull B: %+v %v", rep, err)
+	}
+	if _, err := os.Stat(filepath.Join(b.dir, "images", "old")); !os.IsNotExist(err) {
+		t.Fatal("dog.png (and its empty folder) should be gone on B")
+	}
+	if rep, _ := b.s.Push(ctx, "x", b.dir, spec); len(rep.Uploaded) != 0 || len(rep.Deleted) != 0 {
+		t.Fatalf("push B should do nothing: %+v", rep)
+	}
+
+	// Deleted by the user while the app is stopped: the pull before start handles it.
+	os.Remove(filepath.Join(b.dir, "images", "cat.png"))
+	if rep, _ := b.s.Pull(ctx, "x", b.dir, spec); len(rep.Deleted) != 1 || len(rep.Downloaded) != 0 {
+		t.Fatalf("pull B: %+v", rep)
+	}
+	if rep, _ := a.s.Pull(ctx, "x", a.dir, spec); len(rep.Deleted) != 1 || a.read("images/cat.png") != "" {
+		t.Fatalf("pull A: %+v", rep)
+	}
+}
+
+func TestDeleteLosesToAChange(t *testing.T) {
+	ctx := context.Background()
+	cloud := newFakeRemote()
+	a, b := newComputer(t, cloud), newComputer(t, cloud)
+	t0 := time.Now().Add(-time.Hour)
+	a.write(t, "app.db", "db", t0)
+	a.write(t, "images/cat.png", "cat", t0)
+	a.s.Push(ctx, "x", a.dir, spec)
+	b.s.Pull(ctx, "x", b.dir, spec)
+
+	// A deletes cat.png, B changes it and pushes first: B's change is downloaded back to A.
+	os.Remove(filepath.Join(a.dir, "images", "cat.png"))
+	b.write(t, "images/cat.png", "cat v2", t0.Add(time.Minute))
+	b.s.Push(ctx, "x", b.dir, spec)
+	rep, err := a.s.Push(ctx, "x", a.dir, spec)
+	if err != nil || len(rep.Deleted) != 0 || len(rep.Conflicts) != 1 {
+		t.Fatalf("push A: %+v %v", rep, err)
+	}
+	if a.s.Pull(ctx, "x", a.dir, spec); a.read("images/cat.png") != "cat v2" {
+		t.Fatalf("A should have B's change, has %q", a.read("images/cat.png"))
+	}
+
+	// The other way round: B deletes and pushes, A changed it meanwhile: A keeps and re-uploads it.
+	os.Remove(filepath.Join(b.dir, "images", "cat.png"))
+	b.s.Push(ctx, "x", b.dir, spec)
+	a.write(t, "images/cat.png", "cat v3", t0.Add(2*time.Minute))
+	rep, _ = a.s.Pull(ctx, "x", a.dir, spec)
+	if len(rep.Conflicts) != 1 || a.read("images/cat.png") != "cat v3" {
+		t.Fatalf("pull A: %+v", rep)
+	}
+	if rep, _ := a.s.Push(ctx, "x", a.dir, spec); len(rep.Uploaded) != 1 {
+		t.Fatalf("push A should upload again: %+v", rep)
+	}
+	if b.s.Pull(ctx, "x", b.dir, spec); b.read("images/cat.png") != "cat v3" {
+		t.Fatal("B should get A's copy back")
+	}
+}
+
+func TestEmptySideDeletesNothing(t *testing.T) {
+	ctx := context.Background()
+	cloud := newFakeRemote()
+	a := newComputer(t, cloud)
+	t0 := time.Now().Add(-time.Hour)
+	a.write(t, "app.db", "db", t0)
+	a.write(t, "images/cat.png", "cat", t0)
+	a.s.Push(ctx, "x", a.dir, spec)
+
+	// The data folder was emptied: nothing is trashed, the files come back.
+	os.RemoveAll(a.dir)
+	if rep, _ := a.s.Push(ctx, "x", a.dir, spec); len(rep.Deleted) != 0 || len(cloud.trash) != 0 {
+		t.Fatalf("push: %+v", rep)
+	}
+	if rep, _ := a.s.Pull(ctx, "x", a.dir, spec); len(rep.Downloaded) != 2 {
+		t.Fatalf("pull: %+v", rep)
+	}
+
+	// The cloud folder was emptied (deleted on another computer): nothing is deleted here.
+	cloud.files = map[string]*fakeFile{}
+	if rep, _ := a.s.Pull(ctx, "x", a.dir, spec); len(rep.Deleted) != 0 || a.read("app.db") != "db" {
+		t.Fatalf("pull: %+v", rep)
+	}
+	if rep, _ := a.s.Push(ctx, "x", a.dir, spec); len(rep.Uploaded) != 2 {
+		t.Fatalf("push should upload again: %+v", rep)
+	}
+}
+
+func TestNarrowedPatternsDeleteNothing(t *testing.T) {
+	ctx := context.Background()
+	cloud := newFakeRemote()
+	a := newComputer(t, cloud)
+	t0 := time.Now().Add(-time.Hour)
+	a.write(t, "app.db", "db", t0)
+	a.write(t, "images/cat.png", "cat", t0)
+	a.s.Push(ctx, "x", a.dir, spec)
+	narrow := &library.Cloud{Include: []string{"app.db"}}
+	os.Remove(filepath.Join(a.dir, "images", "cat.png"))
+	if rep, _ := a.s.Push(ctx, "x", a.dir, narrow); len(rep.Deleted) != 0 || len(cloud.trash) != 0 {
+		t.Fatalf("a file no longer synced must not be deleted: %+v", rep)
+	}
 }

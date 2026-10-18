@@ -110,7 +110,15 @@ What the rules look at:
 
 Without a GitHub token, GitHub allows 60 requests an hour; one detection uses up to about 17. A `mydailyapps.json` in the repository is still read as a hint when present.
 
-**Edit** (card `⋯` menu) changes an entry later. **Detect again** reads the installed folder instead of GitHub. **Remove** takes an app out of the library; its folder, data and Drive files stay.
+**Edit** (card `⋯` menu) changes an entry later. **Detect again** reads the installed folder instead of GitHub.
+
+**Remove** takes only the card out of the library. The app's folder, data and Drive files stay. Each app's Drive folder also keeps a copy of its settings (`MyDailyApps/apps/<id>/.mydailyapps-app.json`, refreshed whenever the entry changes and at startup). If you add the same app again (same id, or another id with the same repository), **Detect** finds that copy and brings back the earlier settings, so the old data syncs down on the first start. For folders from older versions without a settings copy, the sync patterns are rebuilt from the files in Drive.
+
+**Delete everything** removes the app completely, after you type its id:
+
+- **Drive:** its Drive folders (`apps/<id>` and `backups/<id>`) go to the Drive trash, where Google keeps them for 30 days. If Drive is connected and this step fails, nothing else is deleted.
+- **This computer:** the app's folder, its data folder, what MyDailyApps remembers about it here, and its library entry are deleted.
+- **Safety check:** folders that are not clearly the app's own (the apps folder itself, the data folder, anything containing MyDailyApps' own files) are refused.
 
 ## Files: choosing what to sync without reading the code
 
@@ -141,8 +149,10 @@ How it works:
 - **Before Start**, newer files are downloaded from `MyDailyApps/apps/<id>/` in Drive.
 - **After the app exits**, files that changed are uploaded. SQLite databases listed under `sqlite` have their write-ahead log merged first, and are never copied while the app runs.
 - **Sync now** (under the card's `⋯` button) does both while the app is stopped. The card shows the result of the last sync.
+- **After the synced files change** (ticked in **Files**, or edited in **Add app**/**Edit**), a stopped app syncs right away, so new save paths reach Drive (and Drive's files reach this computer) without waiting for the next start.
+- **Deletions**: a file that was synced before and is deleted on one side is deleted on the other side too. Cloud copies go to the Drive trash (Google keeps them for 30 days), never deleted for good. If the other side changed the file since the last sync, the change wins and the file comes back. As a safety net, when *every* synced file is gone from one side at once (an emptied data folder, or the Drive folder deleted on another computer), nothing is deleted on the other side; the files are copied back instead. Removing a pattern stops syncing those files but never deletes them.
 - **Conflicts**: if a file changed both on this computer and in Drive since the last sync, the newer copy wins. The other copy is saved to `MyDailyApps/backups/<id>/` in Drive with the date and where it came from.
-- **What isn't synced**: deleting a file is not synced yet, so a file deleted on one computer comes back from the cloud. Patterns can't leave their root folder. SQLite `-wal`/`-shm` files, `.git` and `node_modules` are never synced.
+- **What isn't synced**: patterns can't leave their root folder. SQLite `-wal`/`-shm` files, `.git` and `node_modules` are never synced.
 - **Size limit**: if the matched files are larger than `maxSizeMB`, nothing is uploaded and the card says why.
 - **Errors**: if Drive can't be reached, the app starts with the local copy and the card shows the problem.
 

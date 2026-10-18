@@ -79,7 +79,13 @@ export function FilesDialog({ app, onClose, onChanged }: { app: AppView; onClose
     run(async () => {
       load(await api.applyFiles(app.id, [...chosen]), true);
       onChanged();
-      setMsg(chosen.size === 0 ? "Cloud sync turned off for this app." : "Saved. These files are synced from now on.");
+      setMsg(
+        chosen.size === 0
+          ? "Cloud sync turned off for this app. Its files stay on this computer and in Drive."
+          : info?.running
+            ? "Saved. These files are synced when the app exits."
+            : "Saved. Syncing them now (the card shows the result).",
+      );
     });
 
   const files = info?.files ?? [];

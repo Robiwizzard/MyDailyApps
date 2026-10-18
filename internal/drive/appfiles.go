@@ -233,4 +233,16 @@ func (s *Service) BackupRemote(ctx context.Context, appID, fileID, name string) 
 	return doJSON(c, req, nil)
 }
 
+// Delete moves a synced file to the Drive trash (Google keeps it 30 days).
+func (s *Service) Delete(ctx context.Context, appID, fileID string) error {
+	c, err := s.client(ctx)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"trashed": true})
+	req, _ := http.NewRequestWithContext(ctx, "PATCH", APIBase+"/files/"+url.PathEscape(fileID)+"?fields=id", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return doJSON(c, req, nil)
+}
+
 var _ cloudsync.Remote = (*Service)(nil)

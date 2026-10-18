@@ -45,6 +45,7 @@ func Handler(h *host.Host, ui fs.FS, port int) http.Handler {
 	mux.HandleFunc("GET /api/apps/{id}/config", s.getEntry)
 	mux.HandleFunc("PUT /api/apps/{id}/config", s.putEntry)
 	mux.HandleFunc("DELETE /api/apps/{id}", s.removeEntry)
+	mux.HandleFunc("POST /api/apps/{id}/delete-everything", s.deleteEverything)
 	mux.HandleFunc("GET /api/apps/{id}/files", s.files)
 	mux.HandleFunc("POST /api/apps/{id}/files/record", s.record)
 	mux.HandleFunc("POST /api/apps/{id}/files/aside", s.aside)
@@ -283,6 +284,31 @@ func (s *server) removeEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.apps(w, r)
+}
+
+func (s *server) deleteEverything(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Confirm string `json:"confirm"` // must be the app's id
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	id := r.PathValue("id")
+	if body.Confirm != id {
+		writeErr(w, 400, errors.New("confirmation does not match the app id"))
+		return
+	}
+	report, err := s.h.DeleteApp(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, host.ErrNotFound) {
+			writeErr(w, 404, err)
+		} else {
+			writeErr(w, 409, err)
+		}
+		return
+	}
+	writeJSON(w, 200, map[string]any{"report": report})
 }
 
 func (s *server) files(w http.ResponseWriter, r *http.Request) {

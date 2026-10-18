@@ -180,6 +180,7 @@ export const api = {
   getConfig: (id: string) => request<LibraryEntry>("GET", `/api/apps/${enc(id)}/config`),
   saveConfig: (id: string, e: LibraryEntry) => request<AppsResponse>("PUT", `/api/apps/${enc(id)}/config`, e),
   removeApp: (id: string) => request<AppsResponse>("DELETE", `/api/apps/${enc(id)}`),
+  deleteEverything: (id: string) => request<{ report: string[] }>("POST", `/api/apps/${enc(id)}/delete-everything`, { confirm: id }),
   files: (id: string) => request<FilesInfo>("GET", `/api/apps/${enc(id)}/files`),
   record: (id: string, start: boolean) =>
     request<{ changed: string[] | null; files: FilesInfo }>("POST", `/api/apps/${enc(id)}/files/record`, { start }),

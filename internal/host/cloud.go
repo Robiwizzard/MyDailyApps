@@ -107,6 +107,37 @@ func (h *Host) SyncNow(ctx context.Context, id string) error {
 	return nil
 }
 
+// syncAfterChange syncs right away after an app's synced files changed
+// (new save paths in Files, Add app or Edit), so newly included files reach
+// the cloud, and the cloud's files reach this computer, without waiting for
+// the next start. Only for stopped apps; a running app syncs when it exits.
+func (h *Host) syncAfterChange(id string) {
+	a, err := h.app(id)
+	if err != nil || a.Cloud == nil || !h.Drive.Connected() {
+		return
+	}
+	if st, _ := h.Procs.Status(id); st != "" {
+		return
+	}
+	s, _ := h.Store.App(id)
+	appDir := install.Folder(h.Cfg.AppsDir, s.InstallPath, id)
+	if a.Cloud.AppRoot() && !dirExists(appDir) {
+		return // not installed yet: synced after the first start
+	}
+	h.syncWG.Add(1)
+	go func() {
+		defer h.syncWG.Done()
+		if err := h.SyncNow(context.Background(), id); err != nil {
+			log.Printf("sync after settings change %s: %v", id, err)
+		}
+	}()
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
 // syncRoot is the folder the cloud patterns are relative to.
 func (h *Host) syncRoot(id, appDir string, spec *library.Cloud) string {
 	if spec.AppRoot() {
@@ -144,4 +175,8 @@ func (r syncRecords) SyncRecords(appID string) (map[string]cloudsync.Record, err
 
 func (r syncRecords) PutSyncRecord(appID string, rec cloudsync.Record) error {
 	return r.s.PutSyncRecord(appID, state.SyncRecord{Path: rec.Path, SHA256: rec.SHA256, RemoteID: rec.RemoteID})
+}
+
+func (r syncRecords) DeleteSyncRecord(appID, path string) error {
+	return r.s.DeleteSyncRecord(appID, path)
 }

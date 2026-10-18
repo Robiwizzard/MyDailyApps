@@ -194,7 +194,10 @@ func (h *Host) Startup(ctx context.Context) {
 	h.bump()
 
 	// Look for app updates in the background; the library is usable meanwhile.
-	go h.CheckUpdates(ctx)
+	go func() {
+		h.CheckUpdates(ctx)
+		h.SaveAllAppMeta(ctx)
+	}()
 }
 
 func (h *Host) libraryDetail() string {
