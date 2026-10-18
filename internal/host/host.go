@@ -55,6 +55,9 @@ type Host struct {
 	updates         map[string]install.UpdateStatus
 	updating        map[string]bool
 	checkingUpdates bool
+	checkMu         sync.Mutex      // held while "Fetch all" (or the startup check) runs
+	fetching        map[string]bool // update check running for one app
+	fetchErr        map[string]string
 	obsBefore       map[string]observe.Snapshot // taken at Start, compared at Stop
 	recording       map[string]observe.Snapshot // "record a save" in progress
 	obsMu           sync.Mutex                  // guards the observation files
@@ -77,6 +80,7 @@ func New(cfg *config.Config, store *state.Store, sf *procs.StateFile) (*Host, er
 		Cfg: cfg, Store: store, Lib: library.NewCache(cfg.DataDir),
 		resolved: map[string]library.App{}, syncLocks: map[string]*sync.Mutex{}, syncing: map[string]bool{}, syncNote: map[string]string{},
 		updates: map[string]install.UpdateStatus{}, updating: map[string]bool{},
+		fetching: map[string]bool{}, fetchErr: map[string]string{},
 		obsBefore: map[string]observe.Snapshot{}, recording: map[string]observe.Snapshot{},
 		scan: map[string]install.ScanResult{}, installing: map[string]bool{}, installErr: map[string]string{},
 		tokens: map[string]string{}, ShutdownCh: make(chan struct{}),
@@ -298,6 +302,8 @@ type AppView struct {
 	SyncNote     string `json:"syncNote,omitempty"` // result or problem of the last sync
 	Update       string `json:"update,omitempty"`   // set when a newer version exists, e.g. "3 new commits"
 	Updating     bool   `json:"updating,omitempty"`
+	Fetching     bool   `json:"fetching,omitempty"`   // looking for an update now
+	FetchError   string `json:"fetchError,omitempty"` // why the last update check failed
 }
 
 // Apps merges the library with the scan and running state. Never installs.
@@ -316,6 +322,8 @@ func (h *Host) Apps() []AppView {
 		updates[k] = v
 	}
 	updating := copyBools(h.updating)
+	fetching := copyBools(h.fetching)
+	fetchErr := copyStrings(h.fetchErr)
 	h.mu.Unlock()
 	out := make([]AppView, 0, len(l.Apps))
 	for _, e := range l.Apps {
@@ -325,7 +333,8 @@ func (h *Host) Apps() []AppView {
 		}
 		v := AppView{ID: a.ID, Name: a.Name, Group: a.Group, Description: a.Description, Repo: a.Repo,
 			Folder: h.folder(a.ID, states), Error: errs[a.ID],
-			Cloud: a.Cloud != nil, Syncing: syncing[a.ID], SyncNote: notes[a.ID], Updating: updating[a.ID]}
+			Cloud: a.Cloud != nil, Syncing: syncing[a.ID], SyncNote: notes[a.ID], Updating: updating[a.ID],
+			Fetching: fetching[a.ID], FetchError: fetchErr[a.ID]}
 		if u := updates[a.ID]; u.Available {
 			v.Update = u.Detail
 			if v.Update == "" {

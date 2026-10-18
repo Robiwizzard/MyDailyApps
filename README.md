@@ -148,7 +148,7 @@ How it works:
 
 - **Before Start**, newer files are downloaded from `MyDailyApps/apps/<id>/` in Drive.
 - **After the app exits**, files that changed are uploaded. SQLite databases listed under `sqlite` have their write-ahead log merged first, and are never copied while the app runs.
-- **Sync now** (under the card's `⋯` button) does both while the app is stopped. The card shows the result of the last sync.
+- **Sync now** (under the card's `⋯` button) does both while the app is stopped. **Sync all** next to **Add app** does it for every stopped app that syncs files; running apps are skipped (they sync when they exit). The card shows the result of the last sync.
 - **After the synced files change** (ticked in **Files**, or edited in **Add app**/**Edit**), a stopped app syncs right away, so new save paths reach Drive (and Drive's files reach this computer) without waiting for the next start.
 - **Deletions**: a file that was synced before and is deleted on one side is deleted on the other side too. Cloud copies go to the Drive trash (Google keeps them for 30 days), never deleted for good. If the other side changed the file since the last sync, the change wins and the file comes back. As a safety net, when *every* synced file is gone from one side at once (an emptied data folder, or the Drive folder deleted on another computer), nothing is deleted on the other side; the files are copied back instead. Removing a pattern stops syncing those files but never deletes them.
 - **Conflicts**: if a file changed both on this computer and in Drive since the last sync, the newer copy wins. The other copy is saved to `MyDailyApps/backups/<id>/` in Drive with the date and where it came from.
@@ -187,7 +187,7 @@ Update works only while the app is stopped. It shows the exact steps and asks fi
 - **git:** `git pull --ff-only`, then the app's setup command from its library entry. If you edited files in the app folder, the update stops instead of overwriting them.
 - **release:** the new package is unpacked next to the app and set up, then swapped in. If anything fails, the old version stays.
 
-**Check for updates** in the profile panel runs the check again. App data in `DATA_DIR` is never touched by an update.
+**Fetch** on a card runs the check again for that app (the card says "Up to date." or shows the new version), and **Fetch all** next to **Add app** runs it for every installed app. A failed check (offline, private repository) is shown on the card. App data in `DATA_DIR` is never touched by an update.
 
 ## Running apps
 

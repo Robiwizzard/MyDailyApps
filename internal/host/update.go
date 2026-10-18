@@ -5,20 +5,24 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/robiwizzard/mydailyapps/internal/install"
 	"github.com/robiwizzard/mydailyapps/internal/library"
 )
 
 // CheckUpdates looks for newer versions of every installed app (git fetch or
-// the newest GitHub release). It only looks; nothing is pulled until the
-// user clicks Update. Runs in the background after startup.
+// the newest GitHub release): "Fetch all", and the check after startup. It
+// only looks; nothing is pulled until the user clicks Update. If a check is
+// already running, it waits for that one instead of starting another.
 func (h *Host) CheckUpdates(ctx context.Context) {
-	h.mu.Lock()
-	if h.checkingUpdates {
-		h.mu.Unlock()
+	if !h.checkMu.TryLock() {
+		h.checkMu.Lock() // wait for the running check: its results are fresh
+		h.checkMu.Unlock()
 		return
 	}
+	defer h.checkMu.Unlock()
+	h.mu.Lock()
 	h.checkingUpdates = true
 	h.mu.Unlock()
 	h.bump()
@@ -30,7 +34,6 @@ func (h *Host) CheckUpdates(ctx context.Context) {
 	}()
 
 	l, _ := h.Lib.Get()
-	states, _ := h.Store.Apps()
 	h.mu.Lock()
 	scan := h.scan
 	h.mu.Unlock()
@@ -45,22 +48,50 @@ func (h *Host) CheckUpdates(ctx context.Context) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			a, err := h.app(id)
-			if err != nil {
-				return
-			}
-			st, err := install.CheckUpdate(ctx, a, h.folder(id, states), h.tokenFor(a.Repo, ""))
-			if err != nil {
-				log.Printf("update check %s: %v", id, err)
-				return // offline or private: just don't show an update
-			}
-			h.mu.Lock()
-			h.updates[id] = st
-			h.mu.Unlock()
-			h.bump()
+			h.CheckUpdate(ctx, id)
 		}(e.ID)
 	}
 	wg.Wait()
+}
+
+// CheckUpdate looks for a newer version of one installed app (the card's
+// Fetch button). A failed check (offline, private repo) is shown on the card
+// and keeps the earlier result.
+func (h *Host) CheckUpdate(ctx context.Context, id string) (install.UpdateStatus, error) {
+	a, err := h.app(id)
+	if err != nil {
+		return install.UpdateStatus{}, err
+	}
+	s, _ := h.Store.App(id)
+	dir := install.Folder(h.Cfg.AppsDir, s.InstallPath, id)
+	if !install.Scan(a, dir).Installed {
+		return install.UpdateStatus{}, errors.New("the app is not installed")
+	}
+	h.mu.Lock()
+	if h.fetching[id] || h.updating[id] || h.installing[id] {
+		h.mu.Unlock()
+		return h.updates[id], errors.New("already busy with this app")
+	}
+	h.fetching[id] = true
+	h.mu.Unlock()
+	h.bump()
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	st, err := install.CheckUpdate(ctx, a, dir, h.tokenFor(a.Repo, ""))
+	h.mu.Lock()
+	delete(h.fetching, id)
+	if err != nil {
+		log.Printf("update check %s: %v", id, err)
+		h.fetchErr[id] = "Could not check for updates: " + err.Error()
+		st = h.updates[id]
+	} else {
+		delete(h.fetchErr, id)
+		h.updates[id] = st
+	}
+	h.mu.Unlock()
+	h.bump()
+	return st, err
 }
 
 // Update brings one stopped app to its newest version. Without confirm it

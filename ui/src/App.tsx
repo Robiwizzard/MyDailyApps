@@ -45,6 +45,10 @@ export function App() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [shutDown, setShutDown] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>([]);
+  const [infos, setInfos] = useState<Record<string, string>>({});
+  const [bulk, setBulk] = useState<{ text: string; error?: boolean } | null>(null);
+  const [fetchingAll, setFetchingAll] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
   const lastVersion = useRef(-1);
 
   const refreshApps = useCallback(async () => {
@@ -204,6 +208,72 @@ export function App() {
     }
   };
 
+  // ----- fetch (look for updates) -----
+  const setInfo = (id: string, text?: string) =>
+    setInfos((m) => {
+      const n = { ...m };
+      if (text) n[id] = text;
+      else delete n[id];
+      return n;
+    });
+
+  const fetchOne = async (app: AppView) => {
+    setAppError(app.id);
+    setInfo(app.id);
+    try {
+      const r = await api.fetch(app.id);
+      replaceApp(r.app);
+      if (!r.error && !r.update) {
+        setInfo(app.id, "Up to date.");
+        window.setTimeout(() => setInfo(app.id), 6000);
+      }
+    } catch (e) {
+      setAppError(app.id, (e as Error).message);
+    }
+  };
+
+  const fetchAll = async () => {
+    setFetchingAll(true);
+    setBulk(null);
+    try {
+      const r = await api.checkUpdates();
+      setApps(r.apps ?? []);
+      const installed = r.apps.filter((a) => a.status !== "not_installed");
+      const updates = installed.filter((a) => a.update).length;
+      const failed = installed.filter((a) => a.fetchError).length;
+      let text =
+        installed.length === 0
+          ? "No installed apps to check."
+          : updates === 0
+            ? "All installed apps are up to date."
+            : `${updates} app${updates === 1 ? " has" : "s have"} an update.`;
+      if (failed > 0) text += ` ${failed} could not be checked (see the card${failed === 1 ? "" : "s"}).`;
+      setBulk({ text });
+    } catch (e) {
+      setBulk({ text: (e as Error).message, error: true });
+    } finally {
+      setFetchingAll(false);
+    }
+  };
+
+  const syncAll = async () => {
+    setSyncingAll(true);
+    setBulk(null);
+    try {
+      const r = await api.syncAll();
+      const parts: string[] = [];
+      if (r.started.length > 0) parts.push(`Syncing ${r.started.join(", ")}.`);
+      if (r.skipped.length > 0) parts.push(`Skipped ${r.skipped.join("; ")}.`);
+      if (parts.length === 0) parts.push("No app syncs any files yet. Choose them in an app's Files view.");
+      setBulk({ text: parts.join(" ") });
+      refreshApps().catch(() => {});
+    } catch (e) {
+      setBulk({ text: (e as Error).message, error: true });
+    } finally {
+      setSyncingAll(false);
+    }
+  };
+
   const editApp = async (app: AppView) => {
     try {
       setDialog({ kind: "edit", app, entry: await api.getConfig(app.id) });
@@ -312,9 +382,29 @@ export function App() {
             </label>
             <input id="q" type="search" placeholder="Search by name" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <button type="button" className="btn btn-outline add-app" onClick={() => setDialog({ kind: "add" })}>
-            Add app
-          </button>
+          <div className="toolbar">
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={fetchAll}
+              disabled={fetchingAll || status.checkingUpdates}
+              title="Look for updates for all installed apps"
+            >
+              {fetchingAll || status.checkingUpdates ? "Fetching…" : "Fetch all"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={syncAll}
+              disabled={syncingAll}
+              title="Sync the files of every stopped app with Google Drive"
+            >
+              Sync all
+            </button>
+            <button type="button" className="btn btn-outline add-app" onClick={() => setDialog({ kind: "add" })}>
+              Add app
+            </button>
+          </div>
           <div className="chips" role="group" aria-label="Filter by group">
             <button type="button" className={`chip${group === null ? " chip-on" : ""}`} aria-pressed={group === null} onClick={() => setGroup(null)}>
               All
@@ -326,6 +416,15 @@ export function App() {
             ))}
           </div>
         </div>
+
+        {bulk && (
+          <div className={`notice${bulk.error ? " notice-error" : ""}`} role="status">
+            <span>{bulk.text}</span>
+            <button type="button" className="link-btn" onClick={() => setBulk(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {apps.length === 0 ? (
           <div className="empty">
@@ -346,6 +445,7 @@ export function App() {
                 app={a}
                 busy={busy[a.id]}
                 error={errors[a.id]}
+                info={infos[a.id]}
                 onInstall={() => install(a, false)}
                 onStart={() => start(a, false)}
                 onStop={() => stop(a, false)}
@@ -353,6 +453,7 @@ export function App() {
                 onLogs={() => showLogs(a)}
                 onSync={() => syncNow(a)}
                 onUpdate={() => update(a, false)}
+                onFetch={() => fetchOne(a)}
                 onEdit={() => editApp(a)}
                 onFiles={() => setDialog({ kind: "files", app: a })}
                 onRemove={() => setDialog({ kind: "remove", app: a })}
@@ -370,7 +471,6 @@ export function App() {
           onClose={() => setProfileOpen(false)}
           onShutdown={shutdown}
           onLibraryChanged={() => refreshApps().catch(() => {})}
-          checkingUpdates={status.checkingUpdates}
           libraryNote={status.library}
         />
       )}

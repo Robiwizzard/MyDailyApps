@@ -254,3 +254,37 @@ func TestNewSavePathsSyncRightAway(t *testing.T) {
 		t.Fatal("slot2 came back")
 	}
 }
+
+func TestSyncAll(t *testing.T) {
+	h, fd := newTestHost(t)
+	ctx := context.Background()
+	for _, id := range []string{"one", "two", "plain"} {
+		e := library.App{ID: id, Name: strings.ToUpper(id), Repo: "https://github.com/o/" + id,
+			Install: []library.InstallOption{{Type: "git", Launch: "npm start"}}}
+		if id != "plain" {
+			e.Cloud = &library.Cloud{Include: []string{"*.json"}}
+		}
+		if err := h.SaveEntry(ctx, "", e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.WaitSyncs(10 * time.Second)
+	for _, id := range []string{"one", "two"} {
+		d := h.Cfg.AppDataDir(id)
+		os.MkdirAll(d, 0o700)
+		os.WriteFile(filepath.Join(d, id+".json"), []byte(id), 0o600)
+	}
+	res, err := h.SyncAll()
+	if err != nil || strings.Join(res.Started, ",") != "ONE,TWO" || len(res.Skipped) != 0 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	h.WaitSyncs(10 * time.Second)
+	if !driveHas(fd, "one.json") || !driveHas(fd, "two.json") {
+		t.Fatalf("not uploaded: %+v", fd.Live())
+	}
+	for _, v := range h.Apps() {
+		if v.Syncing {
+			t.Fatalf("%s still syncing", v.ID)
+		}
+	}
+}

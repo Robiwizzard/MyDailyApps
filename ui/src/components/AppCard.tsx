@@ -7,6 +7,7 @@ interface Props {
   app: AppView;
   busy: Busy;
   error?: string;
+  info?: string;
   onInstall: () => void;
   onStart: () => void;
   onStop: () => void;
@@ -14,6 +15,7 @@ interface Props {
   onLogs: () => void;
   onSync: () => void;
   onUpdate: () => void;
+  onFetch: () => void;
   onEdit: () => void;
   onFiles: () => void;
   onRemove: () => void;
@@ -31,7 +33,7 @@ const statusText: Record<string, string> = {
   updating: "Updating…",
 };
 
-export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate, onEdit, onFiles, onRemove, onDelete }: Props) {
+export function AppCard({ app, busy, error, info, onInstall, onStart, onStop, onForceStop, onLogs, onSync, onUpdate, onFetch, onEdit, onFiles, onRemove, onDelete }: Props) {
   const [more, setMore] = useState(false);
   const status =
     busy ??
@@ -160,15 +162,28 @@ export function AppCard({ app, busy, error, onInstall, onStart, onStop, onForceS
       {app.syncNote && !(error || app.error) && (
         <p className={app.syncNote.startsWith("Sync failed") ? "card-error" : "card-note"}>{app.syncNote}</p>
       )}
+      {app.fetchError && !(error || app.error) && <p className="card-error">{app.fetchError}</p>}
       {app.update && status !== "updating" && (
         <p className="card-update">Update available: {app.update}</p>
       )}
+      {info && !app.update && <p className="card-note">{info}</p>}
       <div className="card-bottom">
         <div className={`status status-${status}`}>
           <span className="status-dot" aria-hidden="true" />
           <span>{statusText[status] ?? status}</span>
         </div>
         <div className="card-actions">
+          {app.status !== "not_installed" && status !== "installing" && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onFetch}
+              disabled={!!app.fetching || status === "updating"}
+              title={`Look for an update for ${app.name}`}
+            >
+              {app.fetching ? "Fetching…" : "Fetch"}
+            </button>
+          )}
           {app.update && status !== "updating" && status !== "not_installed" && (
             <button
               type="button"

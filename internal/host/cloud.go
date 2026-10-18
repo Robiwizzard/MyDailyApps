@@ -138,6 +138,79 @@ func dirExists(p string) bool {
 	return err == nil && st.IsDir()
 }
 
+// SyncAllResult says what "Sync all" started.
+type SyncAllResult struct {
+	Started []string `json:"started"` // app names now syncing in the background
+	Skipped []string `json:"skipped"` // "Name: why"
+}
+
+// SyncAll pulls and pushes every stopped app that syncs files, in the
+// background (the cards show "Syncing…"). Running apps are skipped: they
+// sync when they exit.
+func (h *Host) SyncAll() (SyncAllResult, error) {
+	res := SyncAllResult{Started: []string{}, Skipped: []string{}}
+	if !h.Drive.Connected() {
+		return res, errors.New("Google Drive is not connected")
+	}
+	l, _ := h.Lib.Get()
+	var ids []string
+	for _, e := range l.Apps {
+		a, err := h.app(e.ID)
+		if err != nil || a.Cloud == nil {
+			continue
+		}
+		name := a.Name
+		if name == "" {
+			name = a.ID
+		}
+		s, _ := h.Store.App(a.ID)
+		appDir := install.Folder(h.Cfg.AppsDir, s.InstallPath, a.ID)
+		h.mu.Lock()
+		busy := h.installing[a.ID] || h.updating[a.ID] || h.syncing[a.ID]
+		h.mu.Unlock()
+		switch st, _ := h.Procs.Status(a.ID); {
+		case st != "":
+			res.Skipped = append(res.Skipped, name+": running (syncs when it exits)")
+		case busy:
+			res.Skipped = append(res.Skipped, name+": busy")
+		case a.Cloud.AppRoot() && !dirExists(appDir):
+			res.Skipped = append(res.Skipped, name+": not installed")
+		default:
+			ids = append(ids, a.ID)
+			res.Started = append(res.Started, name)
+		}
+	}
+	h.mu.Lock()
+	for _, id := range ids {
+		h.syncing[id] = true // shown at once; syncApp keeps it set while it runs
+	}
+	h.mu.Unlock()
+	h.bump()
+	h.syncWG.Add(1)
+	go func() {
+		defer h.syncWG.Done()
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 3)
+		for _, id := range ids {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if err := h.SyncNow(context.Background(), id); err != nil {
+					h.mu.Lock()
+					delete(h.syncing, id)
+					h.syncNote[id] = "Sync failed (the local copy is kept): " + err.Error()
+					h.mu.Unlock()
+					h.bump()
+				}
+			}(id)
+		}
+		wg.Wait()
+	}()
+	return res, nil
+}
+
 // syncRoot is the folder the cloud patterns are relative to.
 func (h *Host) syncRoot(id, appDir string, spec *library.Cloud) string {
 	if spec.AppRoot() {

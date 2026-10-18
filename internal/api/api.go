@@ -40,6 +40,8 @@ func Handler(h *host.Host, ui fs.FS, port int) http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/sync", s.sync)
 	mux.HandleFunc("POST /api/apps/{id}/update", s.update)
 	mux.HandleFunc("POST /api/updates/check", s.checkUpdates)
+	mux.HandleFunc("POST /api/apps/{id}/fetch", s.fetch)
+	mux.HandleFunc("POST /api/sync-all", s.syncAll)
 	mux.HandleFunc("POST /api/detect", s.detect)
 	mux.HandleFunc("POST /api/apps", s.addEntry)
 	mux.HandleFunc("GET /api/apps/{id}/config", s.getEntry)
@@ -370,6 +372,31 @@ func (s *server) applyFiles(w http.ResponseWriter, r *http.Request) {
 func (s *server) checkUpdates(w http.ResponseWriter, r *http.Request) {
 	s.h.CheckUpdates(r.Context())
 	s.apps(w, r)
+}
+
+// fetch looks for an update for one app (the card's Fetch button).
+func (s *server) fetch(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	st, err := s.h.CheckUpdate(r.Context(), id)
+	if errors.Is(err, host.ErrNotFound) {
+		writeErr(w, 404, err)
+		return
+	}
+	a, _ := s.findApp(id)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"app": a, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"app": a, "update": st.Available})
+}
+
+func (s *server) syncAll(w http.ResponseWriter, r *http.Request) {
+	res, err := s.h.SyncAll()
+	if err != nil {
+		writeErr(w, 409, err)
+		return
+	}
+	writeJSON(w, 200, res)
 }
 
 func (s *server) sync(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,13 @@ export interface AppView {
   syncNote?: string;
   update?: string; // set when a newer version is available, e.g. "3 new commits"
   updating?: boolean;
+  fetching?: boolean; // looking for an update now
+  fetchError?: string; // why the last update check failed
+}
+
+export interface SyncAllResult {
+  started: string[];
+  skipped: string[];
 }
 
 export interface AppsResponse {
@@ -175,6 +182,8 @@ export const api = {
   update: (id: string, confirm: boolean, token?: string) =>
     request<{ app: AppView; log: string[] }>("POST", `/api/apps/${enc(id)}/update`, { confirm, token }),
   checkUpdates: () => request<AppsResponse>("POST", "/api/updates/check"),
+  fetch: (id: string) => request<{ app: AppView; update?: boolean; error?: string }>("POST", `/api/apps/${enc(id)}/fetch`),
+  syncAll: () => request<SyncAllResult>("POST", "/api/sync-all"),
   detect: (repo: string, id?: string, token?: string) => request<Draft>("POST", "/api/detect", { repo, id, token }),
   addApp: (e: LibraryEntry) => request<AppsResponse>("POST", "/api/apps", e),
   getConfig: (id: string) => request<LibraryEntry>("GET", `/api/apps/${enc(id)}/config`),
